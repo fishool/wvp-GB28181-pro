@@ -134,7 +134,7 @@ public class ZLMHttpHookListener {
                 && param.getStream().endsWith(mediaServer.getTranscodeSuffix())  ) {
             return HookResult.SUCCESS();
         }
-        if (param.getSchema().equalsIgnoreCase("rtsp")) {
+//        if (param.getSchema().equalsIgnoreCase("rtsp")) {
             if (param.isRegist()) {
                 log.info("[ZLM HOOK] 流注册, {}->{}->{}/{}", param.getMediaServerId(), param.getSchema(), param.getApp(), param.getStream());
                 String queryParams = param.getParams();
@@ -156,7 +156,7 @@ public class ZLMHttpHookListener {
                 MediaDepartureEvent mediaDepartureEvent = MediaDepartureEvent.getInstance(this, param, mediaServer);
                 applicationEventPublisher.publishEvent(mediaDepartureEvent);
             }
-        }
+//        }
 
         return HookResult.SUCCESS();
     }

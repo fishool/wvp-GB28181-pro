@@ -75,11 +75,13 @@ public class RecordInfoResponseMessageHandler extends SIPRequestProcessorParent 
         }catch (SipException | InvalidArgumentException | ParseException e) {
             log.error("[命令发送失败] 国标级联 国标录像: {}", e.getMessage());
         }
+        String channelId = getText(rootElement, "DeviceID");
+        String sn = getText(rootElement, "SN");
+        String resCountKey = VideoManagerConstants.REDIS_RECORD_INFO_RES_COUNT_PRE + channelId + sn;
+        String resKey = VideoManagerConstants.REDIS_RECORD_INFO_RES_PRE + channelId + sn;
+        RecordInfo recordInfo = new RecordInfo();
         taskExecutor.execute(()->{
             try {
-                String sn = getText(rootElement, "SN");
-                String channelId = getText(rootElement, "DeviceID");
-                RecordInfo recordInfo = new RecordInfo();
                 recordInfo.setChannelId(channelId);
                 recordInfo.setDeviceId(device.getDeviceId());
                 recordInfo.setSn(sn);
@@ -127,15 +129,16 @@ public class RecordInfoResponseMessageHandler extends SIPRequestProcessorParent 
                             record.setRecorderId(getText(itemRecord, "RecorderID"));
                             recordList.add(record);
                         }
+                        // 避免key冲突报错
                         Map<String, String> map = recordList.stream()
                                 .filter(record -> record.getDeviceId() != null)
-                                .collect(Collectors.toMap(record -> record.getStartTime()+ record.getEndTime(), UJson::writeJson));
+                                .collect(Collectors.toMap(record -> record.getStartTime()+ record.getEndTime(), UJson::writeJson,
+                                        (v1, v2) -> v1));
                         // 获取任务结果数据
-                        String resKey = VideoManagerConstants.REDIS_RECORD_INFO_RES_PRE + channelId + sn;
+
                         redisTemplate.opsForHash().putAll(resKey, map);
                         redisTemplate.expire(resKey, recordInfoTtl, TimeUnit.SECONDS);
-                        String resCountKey = VideoManagerConstants.REDIS_RECORD_INFO_RES_COUNT_PRE + channelId + sn;
-                        long incr = redisTemplate.opsForValue().increment(resCountKey, map.size());
+                        long incr = redisTemplate.opsForValue().increment(resCountKey, recordList.size());
                         redisTemplate.expire(resCountKey, recordInfoTtl, TimeUnit.SECONDS);
                         recordInfo.setRecordList(recordList);
                         recordInfo.setCount(Math.toIntExact(incr));
@@ -145,9 +148,6 @@ public class RecordInfoResponseMessageHandler extends SIPRequestProcessorParent 
                         }
                         // 已接收完成
                         List<RecordItem> resList = redisTemplate.opsForHash().entries(resKey).values().stream().map(e -> UJson.readJson(e.toString(), RecordItem.class)).collect(Collectors.toList());
-                        if (resList.size() < sumNum) {
-                            return;
-                        }
                         recordInfo.setRecordList(resList);
                         releaseRequest(device.getDeviceId(), sn,recordInfo);
                     }
