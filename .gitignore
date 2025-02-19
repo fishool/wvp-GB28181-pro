@@ -9,7 +9,7 @@ logs/*
 
 # Mobile Tools for Java (J2ME)
 .mtj.tmp/
-src/main/resources/application-*.yml
+#src/main/resources/application-*.yml
 # Package Files #
 #*.jar
 *.war
