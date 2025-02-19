@@ -1,5 +1,5 @@
-
-window.baseUrl = ""
+// TODO 需要切换为自己的后端地址
+window.baseUrl = "http://121.41.65.92:10030/api"
 
 // map组件全局参数, 注释此内容可以关闭地图功能
 window.mapParam = {
