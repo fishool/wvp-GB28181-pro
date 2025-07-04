@@ -1,5 +1,6 @@
 package com.genersoft.iot.vmp.gb28181.event.sip;
 
+import com.genersoft.iot.vmp.gb28181.bean.SipTransactionInfo;
 import com.genersoft.iot.vmp.gb28181.event.SipSubscribe;
 import lombok.Data;
 import org.jetbrains.annotations.NotNull;
@@ -27,18 +28,20 @@ public class SipEvent implements Delayed {
      */
     private long delay;
 
+    private SipTransactionInfo sipTransactionInfo;
+
     public static SipEvent getInstance(String key, SipSubscribe.Event okEvent, SipSubscribe.Event errorEvent, long delay) {
         SipEvent sipEvent = new SipEvent();
         sipEvent.setKey(key);
         sipEvent.setOkEvent(okEvent);
         sipEvent.setErrorEvent(errorEvent);
-        sipEvent.setDelay(delay);
+        sipEvent.setDelay(System.currentTimeMillis() + delay);
         return sipEvent;
     }
 
     @Override
     public long getDelay(@NotNull TimeUnit unit) {
-        return unit.convert(delay, TimeUnit.MILLISECONDS);
+        return unit.convert(delay - System.currentTimeMillis(), TimeUnit.MILLISECONDS);
     }
 
     @Override

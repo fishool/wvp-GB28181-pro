@@ -48,7 +48,7 @@ public class RedisPushStreamStatusMsgListener implements MessageListener, Applic
 
     @Override
     public void onMessage(Message message, byte[] bytes) {
-        log.info("[REDIS: 流设备状态变化]： {}", new String(message.getBody()));
+        log.info("[REDIS: 推流设备状态变化]： {}", new String(message.getBody()));
         taskQueue.offer(message);
     }
 
@@ -84,15 +84,17 @@ public class RedisPushStreamStatusMsgListener implements MessageListener, Applic
                 if (streamStatusMessage.getOfflineStreams() != null
                         && !streamStatusMessage.getOfflineStreams().isEmpty()) {
                     // 更新部分设备离线
+                    log.info("[REDIS: 推流设备状态变化] 更新部分设备离线： {}个", streamStatusMessage.getOfflineStreams().size());
                     streamPushService.offline(streamStatusMessage.getOfflineStreams());
                 }
                 if (streamStatusMessage.getOnlineStreams() != null &&
                         !streamStatusMessage.getOnlineStreams().isEmpty()) {
                     // 更新部分设备上线
+                    log.info("[REDIS: 推流设备状态变化] 更新部分设备上线： {}个", streamStatusMessage.getOnlineStreams().size());
                     streamPushService.online(streamStatusMessage.getOnlineStreams());
                 }
             } catch (Exception e) {
-                log.warn("[REDIS消息-推流设备状态变化] 发现未处理的异常, \r\n{}", JSON.toJSONString(msg));
+                log.warn("[REDIS消息-推流设备状态变化] 发现未处理的异常, \r\n{}", JSON.parseObject(msg.getBody()));
                 log.error("[REDIS消息-推流设备状态变化] 异常内容： ", e);
             }
         }

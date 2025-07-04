@@ -1,35 +1,45 @@
 package com.genersoft.iot.vmp.gb28181.event;
 
-import com.genersoft.iot.vmp.gb28181.bean.*;
+import com.genersoft.iot.vmp.conf.UserSetting;
+import com.genersoft.iot.vmp.gb28181.bean.CommonGBChannel;
+import com.genersoft.iot.vmp.gb28181.bean.DeviceAlarm;
+import com.genersoft.iot.vmp.gb28181.bean.MobilePosition;
+import com.genersoft.iot.vmp.gb28181.bean.Platform;
 import com.genersoft.iot.vmp.gb28181.event.alarm.AlarmEvent;
-import com.genersoft.iot.vmp.gb28181.event.device.RequestTimeoutEvent;
-import com.genersoft.iot.vmp.gb28181.event.record.RecordEndEvent;
 import com.genersoft.iot.vmp.gb28181.event.subscribe.catalog.CatalogEvent;
 import com.genersoft.iot.vmp.gb28181.event.subscribe.mobilePosition.MobilePositionEvent;
 import com.genersoft.iot.vmp.media.bean.MediaServer;
 import com.genersoft.iot.vmp.media.event.mediaServer.MediaServerOfflineEvent;
 import com.genersoft.iot.vmp.media.event.mediaServer.MediaServerOnlineEvent;
+import com.genersoft.iot.vmp.service.redisMsg.IRedisRpcService;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 
-import javax.sip.TimeoutEvent;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-/**    
+/**
  * @description:Event事件通知推送器，支持推送在线事件、离线事件
  * @author: swwheihei
- * @date:   2020年5月6日 上午11:30:50     
+ * @date:   2020年5月6日 上午11:30:50
  */
+@Slf4j
 @Component
 public class EventPublisher {
 
 	@Autowired
     private ApplicationEventPublisher applicationEventPublisher;
-	
+
+	@Autowired
+	private UserSetting userSetting;
+
+	@Autowired
+	private IRedisRpcService redisRpcService;
+
 	/**
 	 * 设备报警事件
 	 * @param deviceAlarm
@@ -53,27 +63,16 @@ public class EventPublisher {
 	}
 
 
-	public void catalogEventPublish(Integer platformId, CommonGBChannel deviceChannel, String type) {
+	public void catalogEventPublish(Platform platform, CommonGBChannel deviceChannel, String type) {
 		List<CommonGBChannel> deviceChannelList = new ArrayList<>();
 		deviceChannelList.add(deviceChannel);
-		catalogEventPublish(platformId, deviceChannelList, type);
+		catalogEventPublish(platform, deviceChannelList, type);
 	}
-
-
-	public void requestTimeOut(TimeoutEvent timeoutEvent) {
-		RequestTimeoutEvent requestTimeoutEvent = new RequestTimeoutEvent(this);
-		requestTimeoutEvent.setTimeoutEvent(timeoutEvent);
-		applicationEventPublisher.publishEvent(requestTimeoutEvent);
-	}
-
-
-	/**
-	 *
-	 * @param platformId
-	 * @param deviceChannels
-	 * @param type
-	 */
-	public void catalogEventPublish(Integer platformId, List<CommonGBChannel> deviceChannels, String type) {
+	public void catalogEventPublish(Platform platform, List<CommonGBChannel> deviceChannels, String type) {
+		if (platform != null && !userSetting.getServerId().equals(platform.getServerId())) {
+			log.info("[国标级联] 目录状态推送， 此上级平台由其他服务处理，消息已经忽略");
+			return;
+		}
 		CatalogEvent outEvent = new CatalogEvent(this);
 		List<CommonGBChannel> channels = new ArrayList<>();
 		if (deviceChannels.size() > 1) {
@@ -90,10 +89,12 @@ public class EventPublisher {
 		}
 		outEvent.setChannels(channels);
 		outEvent.setType(type);
-		outEvent.setPlatformId(platformId);
+		if (platform != null) {
+			outEvent.setPlatform(platform);
+		}
 		applicationEventPublisher.publishEvent(outEvent);
-	}
 
+	}
 
 	public void mobilePositionEventPublish(MobilePosition mobilePosition) {
 		MobilePositionEvent event = new MobilePositionEvent(this);
@@ -101,9 +102,5 @@ public class EventPublisher {
 		applicationEventPublisher.publishEvent(event);
 	}
 
-	public void recordEndEventPush(RecordInfo recordInfo) {
-		RecordEndEvent outEvent = new RecordEndEvent(this);
-		outEvent.setRecordInfo(recordInfo);
-		applicationEventPublisher.publishEvent(outEvent);
-	}
+
 }

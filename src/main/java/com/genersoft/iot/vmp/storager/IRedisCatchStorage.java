@@ -1,6 +1,7 @@
 package com.genersoft.iot.vmp.storager;
 
 import com.alibaba.fastjson2.JSONObject;
+import com.genersoft.iot.vmp.common.ServerInfo;
 import com.genersoft.iot.vmp.common.SystemAllInfo;
 import com.genersoft.iot.vmp.gb28181.bean.*;
 import com.genersoft.iot.vmp.media.bean.MediaInfo;
@@ -8,7 +9,6 @@ import com.genersoft.iot.vmp.media.bean.MediaServer;
 import com.genersoft.iot.vmp.media.zlm.dto.StreamAuthorityInfo;
 import com.genersoft.iot.vmp.service.bean.GPSMsgInfo;
 import com.genersoft.iot.vmp.service.bean.MessageForPushChannel;
-import com.genersoft.iot.vmp.storager.dao.dto.PlatformRegisterInfo;
 
 import java.util.List;
 import java.util.Map;
@@ -22,22 +22,12 @@ public interface IRedisCatchStorage {
      */
     Long getCSEQ();
 
-    void updatePlatformCatchInfo(PlatformCatch parentPlatformCatch);
-
-    PlatformCatch queryPlatformCatchInfo(String platformGbId);
-
-    void delPlatformCatchInfo(String platformGbId);
-
-    void updatePlatformRegisterInfo(String callId, PlatformRegisterInfo platformRegisterInfo);
-
-    PlatformRegisterInfo queryPlatformRegisterInfo(String callId);
-
-    void delPlatformRegisterInfo(String callId);
-
     /**
      * 在redis添加wvp的信息
      */
-    void updateWVPInfo(JSONObject jsonObject, int time);
+    void updateWVPInfo(ServerInfo serverInfo, int time);
+
+    void removeOfflineWVPInfo(String serverId);
 
     /**
      * 发送推流生成与推流消失消息
@@ -187,4 +177,10 @@ public interface IRedisCatchStorage {
     void sendStartSendRtp(SendRtpInfo sendRtpItem);
 
     void sendPushStreamOnline(SendRtpInfo sendRtpItem);
+
+    ServerInfo queryServerInfo(String serverId);
+
+    String chooseOneServer(String serverId);
+
+
 }

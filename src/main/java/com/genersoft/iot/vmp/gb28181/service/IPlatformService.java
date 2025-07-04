@@ -53,13 +53,7 @@ public interface IPlatformService {
      * 平台离线
      * @param parentPlatform 平台信息
      */
-    void offline(Platform parentPlatform, boolean stopRegisterTask);
-
-    /**
-     * 向上级平台发起注册
-     * @param parentPlatform
-     */
-    void login(Platform parentPlatform);
+    void offline(Platform parentPlatform);
 
     /**
      * 向上级平台发送位置订阅
@@ -76,13 +70,16 @@ public interface IPlatformService {
     /**
      * 语音喊话回复BYE
      */
-    void stopBroadcast(Platform platform, CommonGBChannel channel, String stream, boolean sendBye, MediaServer mediaServerItem);
+    void stopBroadcast(Platform platform, CommonGBChannel channel, String app, String stream, boolean sendBye, MediaServer mediaServerItem);
 
     void addSimulatedSubscribeInfo(Platform parentPlatform);
 
     Platform queryOne(Integer platformId);
 
-    List<Platform> queryEnablePlatformList();
+    List<Platform> queryEnablePlatformList(String serverId);
 
     void delete(Integer platformId, CommonCallback<Object> callback);
+
+    List<Platform> queryAll(String serverId);
+
 }

@@ -1,7 +1,6 @@
 package com.genersoft.iot.vmp.streamPush.service.impl;
 
 import com.alibaba.fastjson2.JSONObject;
-import com.baomidou.dynamic.datasource.annotation.DS;
 import com.genersoft.iot.vmp.common.StreamInfo;
 import com.genersoft.iot.vmp.conf.UserSetting;
 import com.genersoft.iot.vmp.conf.exception.ControllerException;
@@ -17,7 +16,6 @@ import com.genersoft.iot.vmp.media.service.IMediaServerService;
 import com.genersoft.iot.vmp.media.zlm.dto.StreamAuthorityInfo;
 import com.genersoft.iot.vmp.media.zlm.dto.hook.OriginType;
 import com.genersoft.iot.vmp.service.ISendRtpServerService;
-import com.genersoft.iot.vmp.service.bean.GPSMsgInfo;
 import com.genersoft.iot.vmp.service.bean.StreamPushItemFromRedis;
 import com.genersoft.iot.vmp.storager.IRedisCatchStorage;
 import com.genersoft.iot.vmp.streamPush.bean.StreamPush;
@@ -41,7 +39,6 @@ import java.util.*;
 
 @Service
 @Slf4j
-@DS("master")
 public class StreamPushServiceImpl implements IStreamPushService {
 
     @Autowired
@@ -54,6 +51,7 @@ public class StreamPushServiceImpl implements IStreamPushService {
     private UserSetting userSetting;
 
     @Autowired
+
     private IMediaServerService mediaServerService;
 
     @Autowired
@@ -91,11 +89,16 @@ public class StreamPushServiceImpl implements IStreamPushService {
         if (streamPushInDb == null) {
             StreamPush streamPush = StreamPush.getInstance(event, userSetting.getServerId());
             streamPush.setPushing(true);
+            streamPush.setServerId(userSetting.getServerId());
             streamPush.setUpdateTime(DateUtil.getNow());
             streamPush.setPushTime(DateUtil.getNow());
             add(streamPush);
         }else {
-            updatePushStatus(streamPushInDb, true);
+            streamPushInDb.setPushTime(DateUtil.getNow());
+            streamPushInDb.setPushing(true);
+            streamPushInDb.setServerId(userSetting.getServerId());
+            streamPushInDb.setMediaServerId(mediaInfo.getMediaServer().getId());
+            updatePushStatus(streamPushInDb);
         }
         // 冗余数据，自己系统中自用
         if (!"broadcast".equals(event.getApp()) && !"talk".equals(event.getApp())) {
@@ -121,32 +124,29 @@ public class StreamPushServiceImpl implements IStreamPushService {
     public void onApplicationEvent(MediaDepartureEvent event) {
 
         // 兼容流注销时类型从redis记录获取
-        MediaInfo mediaInfo = redisCatchStorage.getStreamInfo(
-                event.getApp(), event.getStream(), event.getMediaServer().getId());
+        MediaInfo mediaInfo = redisCatchStorage.getPushListItem(event.getApp(), event.getStream());
+
         if (mediaInfo != null) {
+            log.info("[推流信息] 查询到redis存在推流缓存， 开始清理，{}/{}", event.getApp(), event.getStream());
             String type = OriginType.values()[mediaInfo.getOriginType()].getType();
-            redisCatchStorage.removeStream(event.getMediaServer().getId(), type, event.getApp(), event.getStream());
-            if ("PUSH".equalsIgnoreCase(type)) {
-                // 冗余数据，自己系统中自用
-                redisCatchStorage.removePushListItem(event.getApp(), event.getStream(), event.getMediaServer().getId());
-            }
-            if (type != null) {
-                // 发送流变化redis消息
-                JSONObject jsonObject = new JSONObject();
-                jsonObject.put("serverId", userSetting.getServerId());
-                jsonObject.put("app", event.getApp());
-                jsonObject.put("stream", event.getStream());
-                jsonObject.put("register", false);
-                jsonObject.put("mediaServerId", event.getMediaServer().getId());
-                redisCatchStorage.sendStreamChangeMsg(type, jsonObject);
-            }
+            // 冗余数据，自己系统中自用
+            redisCatchStorage.removePushListItem(event.getApp(), event.getStream(), event.getMediaServer().getId());
+            // 发送流变化redis消息
+            JSONObject jsonObject = new JSONObject();
+            jsonObject.put("serverId", userSetting.getServerId());
+            jsonObject.put("app", event.getApp());
+            jsonObject.put("stream", event.getStream());
+            jsonObject.put("register", false);
+            jsonObject.put("mediaServerId", event.getMediaServer().getId());
+            redisCatchStorage.sendStreamChangeMsg(type, jsonObject);
         }
         StreamPush streamPush = getPush(event.getApp(), event.getStream());
         if (streamPush == null) {
             return;
         }
         if (streamPush.getGbDeviceId() != null) {
-            updatePushStatus(streamPush, false);
+            streamPush.setPushing(false);
+            updatePushStatus(streamPush);
         }else {
             deleteByAppAndStream(event.getApp(), event.getStream());
         }
@@ -458,15 +458,29 @@ public class StreamPushServiceImpl implements IStreamPushService {
     @Override
     public void offline(List<StreamPushItemFromRedis> offlineStreams) {
         // 更新部分设备离线
-        List<StreamPush> streamPushList = streamPushMapper.getListFromRedis(offlineStreams);
+        List<StreamPush> streamPushList = streamPushMapper.getListInList(offlineStreams);
+        if (streamPushList.isEmpty()) {
+            log.info("[推流设备] 设备离线操作未发现可操作数据。");
+            return;
+        }
         List<CommonGBChannel> commonGBChannelList = gbChannelService.queryListByStreamPushList(streamPushList);
         gbChannelService.offline(commonGBChannelList);
     }
 
     @Override
     public void online(List<StreamPushItemFromRedis> onlineStreams) {
+        if (onlineStreams.isEmpty()) {
+            log.info("[设备上线] 推流设备列表为空");
+            return;
+        }
         // 更新部分设备上线streamPushService
-        List<StreamPush> streamPushList = streamPushMapper.getListFromRedis(onlineStreams);
+        List<StreamPush> streamPushList = streamPushMapper.getListInList(onlineStreams);
+        if (streamPushList.isEmpty()) {
+            for (StreamPushItemFromRedis onlineStream : onlineStreams) {
+                log.info("[设备上线] 未查询到这些通道： {}/{}", onlineStream.getApp(), onlineStream.getStream());
+            }
+            return;
+        }
         List<CommonGBChannel> commonGBChannelList = gbChannelService.queryListByStreamPushList(streamPushList);
         gbChannelService.online(commonGBChannelList);
     }
@@ -495,21 +509,12 @@ public class StreamPushServiceImpl implements IStreamPushService {
     }
 
     @Override
-    public void updateStatus(StreamPush push) {
-
-    }
-
-
-
-    @Override
     @Transactional
-    public void updatePushStatus(StreamPush streamPush, boolean pushIng) {
-        streamPush.setPushing(pushIng);
+    public void updatePushStatus(StreamPush streamPush) {
         if (userSetting.getUsePushingAsStatus()) {
-            streamPush.setGbStatus(pushIng?"ON":"OFF");
+            streamPush.setGbStatus(streamPush.isPushing()?"ON":"OFF");
         }
-        streamPush.setPushTime(DateUtil.getNow());
-        streamPushMapper.updatePushStatus(streamPush.getId(), pushIng);
+        streamPushMapper.updatePushStatus(streamPush);
         if (ObjectUtils.isEmpty(streamPush.getGbDeviceId())) {
             return;
         }
@@ -579,26 +584,13 @@ public class StreamPushServiceImpl implements IStreamPushService {
         if (streamPushList.isEmpty()) {
             return;
         }
-        List<CommonGBChannel> commonGBChannelList = new ArrayList<>();
+        Set<Integer> channelIds = new HashSet<>();
         streamPushList.stream().forEach(streamPush -> {
             if (streamPush.getGbDeviceId() != null) {
-                commonGBChannelList.add(streamPush.buildCommonGBChannel());
+                channelIds.add(streamPush.getGbId());
             }
         });
         streamPushMapper.batchDel(streamPushList);
-        gbChannelService.delete(ids);
-    }
-
-    @Override
-    public void updateGPSFromGPSMsgInfo(List<GPSMsgInfo> gpsMsgInfoList) {
-        List<CommonGBChannel> channels = new ArrayList<>();
-        for (GPSMsgInfo gpsMsgInfo : gpsMsgInfoList) {
-            CommonGBChannel channel = new CommonGBChannel();
-            channel.setGbDeviceId(gpsMsgInfo.getId());
-            channel.setGbLongitude(gpsMsgInfo.getLng());
-            channel.setGbLatitude(gpsMsgInfo.getLat());
-            channels.add(channel);
-        }
-        gbChannelService.updateGpsByDeviceIdForStreamPush(channels);
+        gbChannelService.delete(channelIds);
     }
 }

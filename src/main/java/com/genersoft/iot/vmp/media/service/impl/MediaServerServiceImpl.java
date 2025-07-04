@@ -1,6 +1,5 @@
 package com.genersoft.iot.vmp.media.service.impl;
 
-import com.baomidou.dynamic.datasource.annotation.DS;
 import com.genersoft.iot.vmp.common.CommonCallback;
 import com.genersoft.iot.vmp.common.StreamInfo;
 import com.genersoft.iot.vmp.common.VideoManagerConstants;
@@ -50,7 +49,6 @@ import java.util.*;
  */
 @Slf4j
 @Service
-@DS("master")
 public class MediaServerServiceImpl implements IMediaServerService {
 
     @Autowired
@@ -197,7 +195,7 @@ public class MediaServerServiceImpl implements IMediaServerService {
         } else {
             rtpServerPort = mediaServer.getRtpProxyPort();
         }
-        return new SSRCInfo(rtpServerPort, ssrc, streamId, null);
+        return new SSRCInfo(rtpServerPort, ssrc, "rtp", streamId, null);
     }
 
     @Override
@@ -305,7 +303,7 @@ public class MediaServerServiceImpl implements IMediaServerService {
         mediaServerMapper.update(mediaSerItem);
         MediaServer mediaServerInRedis = getOne(mediaSerItem.getId());
         // 获取完整数据
-        MediaServer mediaServerInDataBase = mediaServerMapper.queryOne(mediaSerItem.getId());
+        MediaServer mediaServerInDataBase = mediaServerMapper.queryOne(mediaSerItem.getId(), userSetting.getServerId());
         if (mediaServerInDataBase == null) {
             return;
         }
@@ -313,6 +311,10 @@ public class MediaServerServiceImpl implements IMediaServerService {
         if (mediaServerInRedis == null || !ssrcFactory.hasMediaServerSSRC(mediaServerInDataBase.getId())) {
             ssrcFactory.initMediaServerSSRC(mediaServerInDataBase.getId(),null);
         }
+        if (mediaSerItem.getSecret() != null && !mediaServerInDataBase.getSecret().equals(mediaSerItem.getSecret())) {
+            mediaServerInDataBase.setSecret(mediaSerItem.getSecret());
+        }
+        mediaServerInDataBase.setSecret(mediaSerItem.getSecret());
         String key = VideoManagerConstants.MEDIA_SERVER_PREFIX + userSetting.getServerId();
         redisTemplate.opsForHash().put(key, mediaServerInDataBase.getId(), mediaServerInDataBase);
         if (mediaServerInDataBase.isStatus()) {
@@ -352,7 +354,7 @@ public class MediaServerServiceImpl implements IMediaServerService {
 
     @Override
     public List<MediaServer> getAll() {
-        List<MediaServer> mediaServerList = mediaServerMapper.queryAll();
+        List<MediaServer> mediaServerList = mediaServerMapper.queryAll(userSetting.getServerId());
         if (mediaServerList.isEmpty()) {
             return new ArrayList<>();
         }
@@ -368,7 +370,7 @@ public class MediaServerServiceImpl implements IMediaServerService {
 
     @Override
     public List<MediaServer> getAllFromDatabase() {
-        return mediaServerMapper.queryAll();
+        return mediaServerMapper.queryAll(userSetting.getServerId());
     }
 
     @Override
@@ -405,7 +407,7 @@ public class MediaServerServiceImpl implements IMediaServerService {
 
     @Override
     public MediaServer getDefaultMediaServer() {
-        return mediaServerMapper.queryDefault();
+        return mediaServerMapper.queryDefault(userSetting.getServerId());
     }
 
     @Override
@@ -425,7 +427,7 @@ public class MediaServerServiceImpl implements IMediaServerService {
             log.info("[添加媒体节点] 失败, mediaServer的类型：为空");
             return;
         }
-        if (mediaServerMapper.queryOne(mediaServer.getId()) != null) {
+        if (mediaServerMapper.queryOne(mediaServer.getId(), userSetting.getServerId()) != null) {
             log.info("[添加媒体节点] 失败, 媒体服务ID已存在，请修改媒体服务器配置, {}", mediaServer.getId());
             throw new ControllerException(ErrorCode.ERROR100.getCode(),"保存失败，媒体服务ID [ " + mediaServer.getId() + " ] 已存在，请修改媒体服务器配置");
         }
@@ -523,7 +525,7 @@ public class MediaServerServiceImpl implements IMediaServerService {
 
     @Override
     public MediaServer checkMediaServer(String ip, int port, String secret, String type) {
-        if (mediaServerMapper.queryOneByHostAndPort(ip, port) != null) {
+        if (mediaServerMapper.queryOneByHostAndPort(ip, port, userSetting.getServerId()) != null) {
             throw new ControllerException(ErrorCode.ERROR100.getCode(), "此连接已存在");
         }
 
@@ -534,7 +536,7 @@ public class MediaServerServiceImpl implements IMediaServerService {
         }
         MediaServer mediaServer = mediaNodeServerService.checkMediaServer(ip, port, secret);
         if (mediaServer != null) {
-            if (mediaServerMapper.queryOne(mediaServer.getId()) != null) {
+            if (mediaServerMapper.queryOne(mediaServer.getId(), userSetting.getServerId()) != null) {
                 throw new ControllerException(ErrorCode.ERROR100.getCode(), "媒体服务ID [" + mediaServer.getId() + " ] 已存在，请修改媒体服务器配置");
             }
         }
@@ -562,7 +564,7 @@ public class MediaServerServiceImpl implements IMediaServerService {
 
     @Override
     public void delete(MediaServer mediaServer) {
-        mediaServerMapper.delOne(mediaServer.getId());
+        mediaServerMapper.delOne(mediaServer.getId(), userSetting.getServerId());
         redisTemplate.opsForZSet().remove(VideoManagerConstants.ONLINE_MEDIA_SERVERS_PREFIX + userSetting.getServerId(), mediaServer.getId());
         String key = VideoManagerConstants.MEDIA_SERVER_PREFIX + userSetting.getServerId() + ":" + mediaServer.getId();
         redisTemplate.delete(key);
@@ -574,13 +576,13 @@ public class MediaServerServiceImpl implements IMediaServerService {
 
     @Override
     public MediaServer getOneFromDatabase(String mediaServerId) {
-        return mediaServerMapper.queryOne(mediaServerId);
+        return mediaServerMapper.queryOne(mediaServerId, userSetting.getServerId());
     }
 
     @Override
     public void syncCatchFromDatabase() {
         List<MediaServer> allInCatch = getAllOnlineList();
-        List<MediaServer> allInDatabase = mediaServerMapper.queryAll();
+        List<MediaServer> allInDatabase = mediaServerMapper.queryAll(userSetting.getServerId());
         Map<String, MediaServer> mediaServerMap = new HashMap<>();
 
         for (MediaServer mediaServer : allInDatabase) {
@@ -608,7 +610,7 @@ public class MediaServerServiceImpl implements IMediaServerService {
 
     @Override
     public List<MediaServer> getAllWithAssistPort() {
-        return mediaServerMapper.queryAllWithAssistPort();
+        return mediaServerMapper.queryAllWithAssistPort(userSetting.getServerId());
     }
 
 
@@ -796,7 +798,11 @@ public class MediaServerServiceImpl implements IMediaServerService {
         if (streamInfoList == null || streamInfoList.isEmpty()) {
             return null;
         }else {
-            return streamInfoList.get(0);
+            StreamInfo streamInfo = streamInfoList.get(0);
+            if (addr != null && !addr.isEmpty()) {
+                streamInfo.changeStreamIp(addr);
+            }
+            return streamInfo;
         }
     }
 
@@ -824,7 +830,25 @@ public class MediaServerServiceImpl implements IMediaServerService {
         }
 
         streamInfoResult.setMediaServer(mediaServer);
-        String callIdParam = ObjectUtils.isEmpty(callId)?"":"?callId=" + callId;
+        Map<String, String> param = new HashMap<>();
+        if (!ObjectUtils.isEmpty(callId)) {
+            param.put("callId", callId);
+        }
+        if (mediaInfo != null && !ObjectUtils.isEmpty(mediaInfo.getOriginTypeStr()))  {
+            param.put("originTypeStr", mediaInfo.getOriginTypeStr());
+        }
+        StringBuilder callIdParamBuilder = new StringBuilder();
+        if (!param.isEmpty()) {
+            callIdParamBuilder.append("?");
+            for (Map.Entry<String, String> entry : param.entrySet()) {
+                callIdParamBuilder.append(entry.getKey()).append("=").append(entry.getValue());
+                callIdParamBuilder.append("&");
+            }
+            callIdParamBuilder.deleteCharAt(callIdParamBuilder.length() - 1);
+        }
+
+        String callIdParam = callIdParamBuilder.toString();
+
         streamInfoResult.setRtmp(addr, mediaServer.getRtmpPort(),mediaServer.getRtmpSSlPort(), app,  stream, callIdParam);
         streamInfoResult.setRtsp(addr, mediaServer.getRtspPort(),mediaServer.getRtspSSLPort(), app,  stream, callIdParam);
 
@@ -928,13 +952,13 @@ public class MediaServerServiceImpl implements IMediaServerService {
     }
 
     @Override
-    public StreamInfo startProxy(MediaServer mediaServer, StreamProxy streamProxy) {
+    public void startProxy(MediaServer mediaServer, StreamProxy streamProxy) {
         IMediaNodeServerService mediaNodeServerService = nodeServerServiceMap.get(mediaServer.getType());
         if (mediaNodeServerService == null) {
             log.info("[startProxy] 失败, mediaServer的类型： {}，未找到对应的实现类", mediaServer.getType());
             throw new ControllerException(ErrorCode.ERROR100.getCode(), "未找到mediaServer对应的实现类");
         }
-        return mediaNodeServerService.startProxy(mediaServer, streamProxy);
+        mediaNodeServerService.startProxy(mediaServer, streamProxy);
     }
 
     @Override
@@ -945,5 +969,36 @@ public class MediaServerServiceImpl implements IMediaServerService {
             throw new ControllerException(ErrorCode.ERROR100.getCode(), "未找到mediaServer对应的实现类");
         }
         mediaNodeServerService.stopProxy(mediaServer, streamKey);
+    }
+
+    @Override
+    public StreamInfo loadMP4File(MediaServer mediaServer, String app, String stream, String datePath) {
+        IMediaNodeServerService mediaNodeServerService = nodeServerServiceMap.get(mediaServer.getType());
+        if (mediaNodeServerService == null) {
+            log.info("[loadMP4File] 失败, mediaServer的类型： {}，未找到对应的实现类", mediaServer.getType());
+            throw new ControllerException(ErrorCode.ERROR100.getCode(), "未找到mediaServer对应的实现类");
+        }
+        mediaNodeServerService.loadMP4File(mediaServer, app, stream, datePath);
+        return getStreamInfoByAppAndStream(mediaServer, app, stream, null, null);
+    }
+
+    @Override
+    public void seekRecordStamp(MediaServer mediaServer, String app, String stream, Double stamp, String schema) {
+        IMediaNodeServerService mediaNodeServerService = nodeServerServiceMap.get(mediaServer.getType());
+        if (mediaNodeServerService == null) {
+            log.info("[seekRecordStamp] 失败, mediaServer的类型： {}，未找到对应的实现类", mediaServer.getType());
+            throw new ControllerException(ErrorCode.ERROR100.getCode(), "未找到mediaServer对应的实现类");
+        }
+        mediaNodeServerService.seekRecordStamp(mediaServer, app, stream, stamp, schema);
+    }
+
+    @Override
+    public void setRecordSpeed(MediaServer mediaServer, String app, String stream, Integer speed, String schema) {
+        IMediaNodeServerService mediaNodeServerService = nodeServerServiceMap.get(mediaServer.getType());
+        if (mediaNodeServerService == null) {
+            log.info("[setRecordSpeed] 失败, mediaServer的类型： {}，未找到对应的实现类", mediaServer.getType());
+            throw new ControllerException(ErrorCode.ERROR100.getCode(), "未找到mediaServer对应的实现类");
+        }
+        mediaNodeServerService.setRecordSpeed(mediaServer, app, stream, speed, schema);
     }
 }

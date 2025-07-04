@@ -150,7 +150,7 @@ public interface IMediaServerService {
 
     Long updateDownloadProcess(MediaServer mediaServerItem, String app, String stream);
 
-    StreamInfo startProxy(MediaServer mediaServer, StreamProxy streamProxy);
+    void startProxy(MediaServer mediaServer, StreamProxy streamProxy);
 
     void stopProxy(MediaServer mediaServer, String streamKey);
 
@@ -159,4 +159,10 @@ public interface IMediaServerService {
     int createRTPServer(MediaServer mediaServerItem, String streamId, long ssrc, Integer port, boolean onlyAuto, boolean disableAudio, boolean reUsePort, Integer tcpMode);
 
     List<String> listRtpServer(MediaServer mediaServer);
+
+    StreamInfo loadMP4File(MediaServer mediaServer, String app, String stream, String datePath);
+
+    void seekRecordStamp(MediaServer mediaServer, String app, String stream, Double stamp, String schema);
+
+    void setRecordSpeed(MediaServer mediaServer, String app, String stream, Integer speed, String schema);
 }

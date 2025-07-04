@@ -80,11 +80,12 @@ public class SipLayer implements CommandLineRunner {
 				monitorIps.add(sipConfig.getIp());
 			}
 		}
+		sipConfig.setMonitorIps(monitorIps);
 		if (ObjectUtils.isEmpty(sipConfig.getShowIp())){
 			sipConfig.setShowIp(String.join(",", monitorIps));
 		}
 		SipFactory.getInstance().setPathName("gov.nist");
-		if (monitorIps.size() > 0) {
+		if (!monitorIps.isEmpty()) {
 			for (String monitorIp : monitorIps) {
 				addListeningPoint(monitorIp, sipConfig.getPort());
 			}
@@ -97,7 +98,7 @@ public class SipLayer implements CommandLineRunner {
 	private void addListeningPoint(String monitorIp, int port){
 		SipStackImpl sipStack;
 		try {
-			sipStack = (SipStackImpl)SipFactory.getInstance().createSipStack(DefaultProperties.getProperties("GB28181_SIP", userSetting.getSipLog()));
+			sipStack = (SipStackImpl)SipFactory.getInstance().createSipStack(DefaultProperties.getProperties("GB28181_SIP", userSetting.getSipLog(), userSetting.isSipCacheServerConnections()));
 			sipStack.setMessageParserFactory(new GbStringMsgParserFactory());
 		} catch (PeerUnavailableException e) {
 			log.error("[SIP SERVER] SIP服务启动失败， 监听地址{}失败,请检查ip是否正确", monitorIp);

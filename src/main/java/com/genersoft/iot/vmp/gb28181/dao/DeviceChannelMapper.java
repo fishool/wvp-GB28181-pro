@@ -86,10 +86,11 @@ public interface DeviceChannelMapper {
     int update(DeviceChannel channel);
 
     @SelectProvider(type = DeviceChannelProvider.class, method = "queryChannels")
-    List<DeviceChannel> queryChannels(@Param("dataDeviceId") int dataDeviceId, @Param("civilCode") String civilCode,
+    List<DeviceChannel> queryChannels(@Param("dataDeviceId") Integer dataDeviceId, @Param("civilCode") String civilCode,
                                       @Param("businessGroupId") String businessGroupId, @Param("parentChannelId") String parentChannelId,
-                                      @Param("query") String query, @Param("hasSubChannel") Boolean hasSubChannel,
-                                      @Param("online") Boolean online, @Param("channelIds") List<String> channelIds);
+                                      @Param("query") String query, @Param("queryParent") Boolean queryParent,
+                                      @Param("hasSubChannel") Boolean hasSubChannel, @Param("online") Boolean online,
+                                      @Param("channelIds") List<String> channelIds, @Param("hasStream") Boolean hasStream);
 
     @SelectProvider(type = DeviceChannelProvider.class, method = "queryChannelsByDeviceDbId")
     List<DeviceChannel> queryChannelsByDeviceDbId(@Param("dataDeviceId") int dataDeviceId);
@@ -100,7 +101,7 @@ public interface DeviceChannelMapper {
             " </script>")
     List<Integer> queryChaneIdListByDeviceDbIds(List<Integer> deviceDbIds);
 
-    @Delete("DELETE FROM wvp_device_channel WHERE data_type =1 and data_device_id=#{deviceId}")
+    @Delete("DELETE FROM wvp_device_channel WHERE data_type =1 and data_device_id=#{dataDeviceId}")
     int cleanChannelsByDeviceId(@Param("dataDeviceId") int dataDeviceId);
 
     @Delete("DELETE FROM wvp_device_channel WHERE id=#{id}")
@@ -666,4 +667,8 @@ public interface DeviceChannelMapper {
             " where data_type = 1 and data_device_id=#{dataDeviceId} and device_id = #{channelId}" +
             " </script>"})
     DeviceChannel getOneBySourceChannelId(@Param("dataDeviceId") int dataDeviceId, @Param("channelId") String channelId);
+
+    @Update(value = {"UPDATE wvp_device_channel SET status = 'OFF' WHERE data_type = 1 and data_device_id=#{deviceId}"})
+    void offlineByDeviceId(@Param("deviceId") int deviceId);
+
 }

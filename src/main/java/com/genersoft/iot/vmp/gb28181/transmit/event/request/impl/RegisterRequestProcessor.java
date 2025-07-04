@@ -5,7 +5,7 @@ import com.genersoft.iot.vmp.conf.UserSetting;
 import com.genersoft.iot.vmp.gb28181.auth.DigestServerAuthenticationHelper;
 import com.genersoft.iot.vmp.gb28181.bean.Device;
 import com.genersoft.iot.vmp.gb28181.bean.GbSipDate;
-import com.genersoft.iot.vmp.gb28181.bean.RemoteAddressInfo;
+import com.genersoft.iot.vmp.common.RemoteAddressInfo;
 import com.genersoft.iot.vmp.gb28181.bean.SipTransactionInfo;
 import com.genersoft.iot.vmp.gb28181.service.IDeviceService;
 import com.genersoft.iot.vmp.gb28181.transmit.SIPProcessorObserver;
@@ -70,8 +70,6 @@ public class RegisterRequestProcessor extends SIPRequestProcessorParent implemen
 
     /**
      * 收到注册请求 处理
-     *
-     * @param evt
      */
     @Override
     public void process(RequestEvent evt) {
@@ -115,8 +113,7 @@ public class RegisterRequestProcessor extends SIPRequestProcessorParent implemen
                     device.setTransport("TCP".equalsIgnoreCase(transport) ? "TCP" : "UDP");
                     sipSender.transmitRequest(request.getLocalAddress().getHostAddress(), registerOkResponse);
                     device.setRegisterTime(DateUtil.getNow());
-                    SipTransactionInfo sipTransactionInfo = new SipTransactionInfo((SIPResponse) registerOkResponse);
-                    deviceService.online(device, sipTransactionInfo);
+                    deviceService.online(device, null);
                 } else {
                     deviceService.offline(deviceId, "主动注销");
                 }
@@ -147,12 +144,15 @@ public class RegisterRequestProcessor extends SIPRequestProcessorParent implemen
 
             // 携带授权头并且密码正确
             response = getMessageFactory().createResponse(Response.OK, request);
-            // 添加date头
-            SIPDateHeader dateHeader = new SIPDateHeader();
-            // 使用自己修改的
-            GbSipDate gbSipDate = new GbSipDate(Calendar.getInstance(Locale.ENGLISH).getTimeInMillis());
-            dateHeader.setDate(gbSipDate);
-            response.addHeader(dateHeader);
+            // 如果主动禁用了Date头，则不添加
+            if (!userSetting.isDisableDateHeader()) {
+                // 添加date头
+                SIPDateHeader dateHeader = new SIPDateHeader();
+                // 使用自己修改的
+                GbSipDate gbSipDate = new GbSipDate(Calendar.getInstance(Locale.ENGLISH).getTimeInMillis());
+                dateHeader.setDate(gbSipDate);
+                response.addHeader(dateHeader);
+            }
 
             if (request.getExpires() == null) {
                 response = getMessageFactory().createResponse(Response.BAD_REQUEST, request);
@@ -166,7 +166,7 @@ public class RegisterRequestProcessor extends SIPRequestProcessorParent implemen
 
             if (device == null) {
                 device = new Device();
-                device.setStreamMode("UDP");
+                device.setStreamMode("TCP-PASSIVE");
                 device.setCharset("GB2312");
                 device.setGeoCoordSys("WGS84");
                 device.setMediaServerId("auto");
@@ -174,7 +174,7 @@ public class RegisterRequestProcessor extends SIPRequestProcessorParent implemen
                 device.setOnLine(false);
             } else {
                 if (ObjectUtils.isEmpty(device.getStreamMode())) {
-                    device.setStreamMode("UDP");
+                    device.setStreamMode("TCP-PASSIVE");
                 }
                 if (ObjectUtils.isEmpty(device.getCharset())) {
                     device.setCharset("GB2312");
@@ -183,7 +183,7 @@ public class RegisterRequestProcessor extends SIPRequestProcessorParent implemen
                     device.setGeoCoordSys("WGS84");
                 }
             }
-
+            device.setServerId(userSetting.getServerId());
             device.setIp(remoteAddressInfo.getIp());
             device.setPort(remoteAddressInfo.getPort());
             device.setHostAddress(remoteAddressInfo.getIp().concat(":").concat(String.valueOf(remoteAddressInfo.getPort())));
@@ -221,12 +221,15 @@ public class RegisterRequestProcessor extends SIPRequestProcessorParent implemen
     private Response getRegisterOkResponse(Request request) throws ParseException {
         // 携带授权头并且密码正确
         Response response = getMessageFactory().createResponse(Response.OK, request);
-        // 添加date头
-        SIPDateHeader dateHeader = new SIPDateHeader();
-        // 使用自己修改的
-        GbSipDate gbSipDate = new GbSipDate(Calendar.getInstance(Locale.ENGLISH).getTimeInMillis());
-        dateHeader.setDate(gbSipDate);
-        response.addHeader(dateHeader);
+        // 如果主动禁用了Date头，则不添加
+        if (!userSetting.isDisableDateHeader()) {
+            // 添加date头
+            SIPDateHeader dateHeader = new SIPDateHeader();
+            // 使用自己修改的
+            GbSipDate gbSipDate = new GbSipDate(Calendar.getInstance(Locale.ENGLISH).getTimeInMillis());
+            dateHeader.setDate(gbSipDate);
+            response.addHeader(dateHeader);
+        }
 
         // 添加Contact头
         response.addHeader(request.getHeader(ContactHeader.NAME));

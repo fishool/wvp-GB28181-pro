@@ -12,6 +12,7 @@ import org.springframework.stereotype.Component;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.net.ConnectException;
 import java.net.SocketTimeoutException;
 import java.util.HashMap;
@@ -24,6 +25,7 @@ import java.util.concurrent.TimeUnit;
 public class ZLMRESTfulUtils {
 
     private OkHttpClient client;
+
 
     public interface RequestCallback{
         void run(JSONObject response);
@@ -376,6 +378,7 @@ public class ZLMRESTfulUtils {
         param.put("url", streamUrl);
         param.put("timeout_sec", timeout_sec);
         param.put("expire_sec", expire_sec);
+        param.put("async", 1);
         sendGetForImg(mediaServerItem, "getSnap", param, targetPath, fileName);
     }
 
@@ -414,5 +417,36 @@ public class ZLMRESTfulUtils {
         param.put("period", date);
         param.put("name", fileName);
         return sendPost(mediaServerItem, "deleteRecordDirectory",param, null);
+    }
+
+    public JSONObject loadMP4File(MediaServer mediaServer, String app, String stream, String datePath) {
+        Map<String, Object> param = new HashMap<>(1);
+        param.put("vhost", "__defaultVhost__");
+        param.put("app", app);
+        param.put("stream", stream);
+        param.put("file_path", datePath);
+        param.put("file_repeat", "0");
+        return sendPost(mediaServer, "loadMP4File",param, null);
+    }
+
+    public JSONObject setRecordSpeed(MediaServer mediaServer, String app, String stream, int speed, String schema) {
+        Map<String, Object> param = new HashMap<>(1);
+        param.put("vhost", "__defaultVhost__");
+        param.put("app", app);
+        param.put("stream", stream);
+        param.put("speed", speed);
+        param.put("schema", schema);
+        return sendPost(mediaServer, "setRecordSpeed",param, null);
+    }
+
+    public JSONObject seekRecordStamp(MediaServer mediaServer, String app, String stream, Double stamp, String schema) {
+        Map<String, Object> param = new HashMap<>(1);
+        param.put("vhost", "__defaultVhost__");
+        param.put("app", app);
+        param.put("stream", stream);
+        BigDecimal bigDecimal = new BigDecimal(stamp);
+        param.put("stamp", bigDecimal);
+        param.put("schema", schema);
+        return sendPost(mediaServer, "seekRecordStamp",param, null);
     }
 }

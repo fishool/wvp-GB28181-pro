@@ -112,6 +112,8 @@ user-settings:
   stream-on-demand: true
   # 是否开启接口文档
   doc-enable: false
+  # 是否返回Date属性，true：不返回，避免摄像头通过该参数自动校时，false：返回，摄像头可能会根据该时间校时
+  disable-date-header: false
 
 # 关闭在线文档（生产环境建议关闭）
 springdoc:

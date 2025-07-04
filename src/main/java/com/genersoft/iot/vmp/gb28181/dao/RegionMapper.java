@@ -1,5 +1,6 @@
 package com.genersoft.iot.vmp.gb28181.dao;
 
+import com.genersoft.iot.vmp.common.CivilCodePo;
 import com.genersoft.iot.vmp.gb28181.bean.CommonGBChannel;
 import com.genersoft.iot.vmp.gb28181.bean.Region;
 import com.genersoft.iot.vmp.gb28181.bean.RegionTree;
@@ -79,9 +80,8 @@ public interface RegionMapper {
             " where " +
             " <if test='parentId != null'> parent_id = #{parentId} </if> " +
             " <if test='parentId == null'> parent_id is null </if> " +
-            " <if test='query != null'> AND (device_id LIKE concat('%',#{query},'%') escape '/' OR name LIKE concat('%',#{query},'%') escape '/')</if> " +
             " </script>")
-    List<RegionTree> queryForTree(@Param("query") String query, @Param("parentId") Integer parentId);
+    List<RegionTree> queryForTree(@Param("parentId") Integer parentId);
 
     @Delete("<script>" +
             " DELETE FROM wvp_common_region WHERE id in " +
@@ -179,4 +179,12 @@ public interface RegionMapper {
             " </script>")
     Set<Region> queryNotShareRegionForPlatformByRegionList(Set<Region> allRegion, @Param("platformId") Integer platformId);
 
+
+    @Select(" <script>" +
+            " SELECT device_id " +
+            " from wvp_common_region" +
+            " where device_id in " +
+            " <foreach collection='civilCodePoList'  item='item'  open='(' separator=',' close=')' > #{item.code}</foreach>" +
+            " </script>")
+    Set<String> queryInCivilCodePoList(List<CivilCodePo> civilCodePoList);
 }

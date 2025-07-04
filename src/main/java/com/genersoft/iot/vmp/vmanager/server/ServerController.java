@@ -5,7 +5,6 @@ import com.alibaba.fastjson2.JSONObject;
 import com.genersoft.iot.vmp.common.SystemAllInfo;
 import com.genersoft.iot.vmp.common.VersionPo;
 import com.genersoft.iot.vmp.common.enums.ChannelDataType;
-import com.genersoft.iot.vmp.common.enums.DeviceControlType;
 import com.genersoft.iot.vmp.conf.SipConfig;
 import com.genersoft.iot.vmp.conf.UserSetting;
 import com.genersoft.iot.vmp.conf.VersionInfo;
@@ -29,6 +28,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -42,13 +42,14 @@ import oshi.hardware.HardwareAbstractionLayer;
 import oshi.hardware.NetworkIF;
 import oshi.software.os.OperatingSystem;
 
+import javax.servlet.http.HttpServletRequest;
 import java.io.File;
 import java.text.DecimalFormat;
 import java.util.*;
 
 @SuppressWarnings("rawtypes")
 @Tag(name = "服务控制")
-
+@Slf4j
 @RestController
 @RequestMapping("/api/server")
 public class ServerController {
@@ -80,6 +81,7 @@ public class ServerController {
 
     @Value("${server.port}")
     private int serverPort;
+
 
     @Autowired
     private IRedisCatchStorage redisCatchStorage;
@@ -177,32 +179,13 @@ public class ServerController {
     }
 
 
-    @Operation(summary = "重启服务", security = @SecurityRequirement(name = JwtUtils.HEADER))
-    @GetMapping(value = "/restart")
+    @Operation(summary = "关闭服务", security = @SecurityRequirement(name = JwtUtils.HEADER))
+    @GetMapping(value = "/shutdown")
     @ResponseBody
-    public void restart() {
-//        taskExecutor.execute(()-> {
-//            try {
-//                Thread.sleep(3000);
-//                SipProvider up = (SipProvider) SpringBeanFactory.getBean("udpSipProvider");
-//                SipStackImpl stack = (SipStackImpl) up.getSipStack();
-//                stack.stop();
-//                Iterator listener = stack.getListeningPoints();
-//                while (listener.hasNext()) {
-//                    stack.deleteListeningPoint((ListeningPoint) listener.next());
-//                }
-//                Iterator providers = stack.getSipProviders();
-//                while (providers.hasNext()) {
-//                    stack.deleteSipProvider((SipProvider) providers.next());
-//                }
-//                VManageBootstrap.restart();
-//            } catch (InterruptedException | ObjectInUseException e) {
-//                throw new ControllerException(ErrorCode.ERROR100.getCode(), e.getMessage());
-//            }
-//        });
+    public void shutdown() {
+        log.info("正在关闭服务。。。");
+        System.exit(1);
     }
-
-    ;
 
     @Operation(summary = "获取系统配置信息", security = @SecurityRequirement(name = JwtUtils.HEADER))
     @GetMapping(value = "/system/configInfo")
@@ -224,7 +207,7 @@ public class ServerController {
     }
 
     @GetMapping(value = "/config")
-    @Operation(summary = "获取配置信息")
+    @Operation(summary = "获取配置信息", security = @SecurityRequirement(name = JwtUtils.HEADER))
     @Parameter(name = "type", description = "配置类型（sip, base）", required = true)
     @ResponseBody
     public JSONObject getVersion(String type) {
@@ -251,7 +234,7 @@ public class ServerController {
 
     @GetMapping(value = "/system/info")
     @ResponseBody
-    @Operation(summary = "获取系统信息")
+    @Operation(summary = "获取系统信息", security = @SecurityRequirement(name = JwtUtils.HEADER))
     public SystemAllInfo getSystemInfo() {
         SystemAllInfo systemAllInfo = redisCatchStorage.getSystemInfo();
 
@@ -260,7 +243,7 @@ public class ServerController {
 
     @GetMapping(value = "/media_server/load")
     @ResponseBody
-    @Operation(summary = "获取负载信息")
+    @Operation(summary = "获取负载信息", security = @SecurityRequirement(name = JwtUtils.HEADER))
     public List<MediaServerLoad> getMediaLoad() {
         List<MediaServerLoad> result = new ArrayList<>();
         List<MediaServer> allOnline = mediaServerService.getAllOnline();
@@ -276,7 +259,7 @@ public class ServerController {
 
     @GetMapping(value = "/resource/info")
     @ResponseBody
-    @Operation(summary = "获取负载信息")
+    @Operation(summary = "获取负载信息", security = @SecurityRequirement(name = JwtUtils.HEADER))
     public ResourceInfo getResourceInfo() {
         ResourceInfo result = new ResourceInfo();
         ResourceBaseInfo deviceInfo = deviceService.getOverview();
@@ -293,8 +276,8 @@ public class ServerController {
 
     @GetMapping(value = "/info")
     @ResponseBody
-    @Operation(summary = "获取系统信息")
-    public Map<String, Map<String, String>> getInfo() {
+    @Operation(summary = "获取系统信息", security = @SecurityRequirement(name = JwtUtils.HEADER))
+    public Map<String, Map<String, String>> getInfo(HttpServletRequest request) {
         Map<String, Map<String, String>> result = new LinkedHashMap<>();
         Map<String, String> hardwareMap = new LinkedHashMap<>();
         result.put("硬件信息", hardwareMap);
@@ -342,12 +325,18 @@ public class ServerController {
         platformMap.put("GIT版本", version.getGIT_Revision_SHORT());
         platformMap.put("DOCKER环境", new File("/.dockerenv").exists()?"是":"否");
 
+        Map<String, String> docmap = new LinkedHashMap<>();
+        result.put("文档地址", docmap);
+        docmap.put("部署文档", "https://doc.wvp-pro.cn");
+        docmap.put("接口文档", String.format("%s://%s:%s/doc.html", request.getScheme(), request.getServerName(), request.getServerPort()));
+
+
         return result;
     }
 
     @GetMapping(value = "/channel/datatype")
     @ResponseBody
-    @Operation(summary = "获取系统接入的数据类型")
+    @Operation(summary = "获取系统接入的数据类型", security = @SecurityRequirement(name = JwtUtils.HEADER))
     public List<Map<String, Object>> getDataType() {
         List<Map<String, Object>> result = new LinkedList<>();
         for (ChannelDataType item : ChannelDataType.values()) {

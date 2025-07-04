@@ -1,6 +1,5 @@
 package com.genersoft.iot.vmp.gb28181.service.impl;
 
-import com.baomidou.dynamic.datasource.annotation.DS;
 import com.genersoft.iot.vmp.common.InviteInfo;
 import com.genersoft.iot.vmp.common.*;
 import com.genersoft.iot.vmp.conf.DynamicTask;
@@ -29,9 +28,11 @@ import com.genersoft.iot.vmp.media.event.media.MediaDepartureEvent;
 import com.genersoft.iot.vmp.media.event.media.MediaNotFoundEvent;
 import com.genersoft.iot.vmp.media.service.IMediaServerService;
 import com.genersoft.iot.vmp.media.zlm.dto.StreamAuthorityInfo;
+import com.genersoft.iot.vmp.service.ICloudRecordService;
 import com.genersoft.iot.vmp.service.IReceiveRtpServerService;
 import com.genersoft.iot.vmp.service.ISendRtpServerService;
 import com.genersoft.iot.vmp.service.bean.*;
+import com.genersoft.iot.vmp.service.redisMsg.IRedisRpcPlayService;
 import com.genersoft.iot.vmp.storager.IRedisCatchStorage;
 import com.genersoft.iot.vmp.utils.CloudRecordUtils;
 import com.genersoft.iot.vmp.utils.DateUtil;
@@ -64,8 +65,7 @@ import java.util.Vector;
 
 @SuppressWarnings(value = {"rawtypes", "unchecked"})
 @Slf4j
-@Service
-@DS("master")
+@Service("playService")
 public class PlayServiceImpl implements IPlayService {
 
     @Autowired
@@ -124,6 +124,9 @@ public class PlayServiceImpl implements IPlayService {
 
     @Autowired
     private ICloudRecordService cloudRecordService;
+
+    @Autowired
+    private IRedisRpcPlayService redisRpcPlayService;
 
     /**
      * 流到来的处理
@@ -188,7 +191,7 @@ public class PlayServiceImpl implements IPlayService {
                     DeviceChannel channel = deviceChannelService.getOneById(sendRtpInfo.getChannelId());
                     try {
                         if (device != null && channel != null) {
-                            cmder.streamByeCmd(device, channel.getDeviceId(), event.getStream(), sendRtpInfo.getCallId());
+                            cmder.streamByeCmd(device, channel.getDeviceId(), event.getApp(), event.getStream(), sendRtpInfo.getCallId(), null);
                             if (sendRtpInfo.getPlayType().equals(InviteStreamType.BROADCAST)
                                     || sendRtpInfo.getPlayType().equals(InviteStreamType.TALK)) {
                                 AudioBroadcastCatch audioBroadcastCatch = audioBroadcastManager.get(channel.getId());
@@ -287,6 +290,21 @@ public class PlayServiceImpl implements IPlayService {
         }
     }
 
+    @Override
+    public void play(Device device, DeviceChannel channel, ErrorCallback<StreamInfo> callback) {
+
+        // 判断设备是否属于当前平台, 如果不属于则发起自动调用
+        if (!userSetting.getServerId().equals(device.getServerId())) {
+            redisRpcPlayService.play(device.getServerId(), channel.getId(), callback);
+            return;
+        }
+        MediaServer mediaServerItem = getNewMediaServerItem(device);
+        if (mediaServerItem == null) {
+            log.warn("[点播] 未找到可用的zlm deviceId: {},channelId:{}", device.getDeviceId(), channel.getDeviceId());
+            throw new ControllerException(ErrorCode.ERROR100.getCode(), "未找到可用的zlm");
+        }
+        play(mediaServerItem, device, channel, null, userSetting.getRecordSip(), callback);
+    }
 
     @Override
     public SSRCInfo play(MediaServer mediaServerItem, String deviceId, String channelId, String ssrc, ErrorCallback<StreamInfo> callback) {
@@ -305,11 +323,11 @@ public class PlayServiceImpl implements IPlayService {
             throw new ControllerException(ErrorCode.ERROR100.getCode(), "未找到通道");
         }
 
-        return play(mediaServerItem, device, channel, ssrc, callback);
+        return play(mediaServerItem, device, channel, ssrc, userSetting.getRecordSip(), callback);
     }
 
-    private SSRCInfo play(MediaServer mediaServerItem, Device device, DeviceChannel channel, String ssrc,
-                      ErrorCallback<StreamInfo> callback) {
+    private SSRCInfo play(MediaServer mediaServerItem, Device device, DeviceChannel channel, String ssrc, Boolean record,
+                          ErrorCallback<StreamInfo> callback) {
         if (mediaServerItem == null ) {
             if (callback != null) {
                 callback.run(InviteErrorCode.ERROR_FOR_PARAMETER_ERROR.getCode(),
@@ -323,10 +341,11 @@ public class PlayServiceImpl implements IPlayService {
         if (inviteInfoInCatch != null ) {
             if (inviteInfoInCatch.getStreamInfo() == null) {
                 // 释放生成的ssrc，使用上一次申请的
+
                 ssrcFactory.releaseSsrc(mediaServerItem.getId(), ssrc);
                 // 点播发起了但是尚未成功, 仅注册回调等待结果即可
                 inviteStreamService.once(InviteSessionType.PLAY, channel.getId(), null, callback);
-                log.info("[点播开始] 已经请求中，等待结果， deviceId: {}, channelId: {}", device.getDeviceId(), channel.getDeviceId());
+                log.info("[点播开始] 已经请求中，等待结果， deviceId: {}, channelId({}): {}", device.getDeviceId(), channel.getDeviceId(), channel.getId());
                 return inviteInfoInCatch.getSsrcInfo();
             }else {
                 StreamInfo streamInfo = inviteInfoInCatch.getStreamInfo();
@@ -372,6 +391,7 @@ public class PlayServiceImpl implements IPlayService {
         rtpServerParam.setTcpMode(tcpMode);
         rtpServerParam.setOnlyAuto(false);
         rtpServerParam.setDisableAudio(!channel.isHasAudio());
+
         SSRCInfo ssrcInfo = receiveRtpServerService.openRTPServer(rtpServerParam, (code, msg, result) -> {
 
             if (code == InviteErrorCode.SUCCESS.getCode() && result != null && result.getHookData() != null) {
@@ -404,14 +424,14 @@ public class PlayServiceImpl implements IPlayService {
                 }
                 inviteStreamService.call(InviteSessionType.PLAY, channel.getId(), null, code, msg, null);
                 inviteStreamService.removeInviteInfoByDeviceAndChannel(InviteSessionType.PLAY, channel.getId());
-                SsrcTransaction ssrcTransaction = sessionManager.getSsrcTransactionByStream(streamId);
+                SsrcTransaction ssrcTransaction = sessionManager.getSsrcTransactionByStream("rtp", streamId);
                 if (ssrcTransaction != null) {
                     try {
-                        cmder.streamByeCmd(device, channel.getDeviceId(), streamId, null);
+                        cmder.streamByeCmd(device, channel.getDeviceId(),"rtp", streamId, null, null);
                     } catch (InvalidArgumentException | ParseException | SipException | SsrcTransactionNotFoundException e) {
                         log.error("[点播超时]， 发送BYE失败 {}", e.getMessage());
                     } finally {
-                        sessionManager.removeByStream(streamId);
+                        sessionManager.removeByStream("rtp", streamId);
                     }
                 }
             }
@@ -425,14 +445,20 @@ public class PlayServiceImpl implements IPlayService {
                     null);
             return null;
         }
-        log.info("[点播开始] deviceId: {}, channelId: {},码流类型：{}, 收流端口： {}, 码流：{}, 收流模式：{}, SSRC: {}, SSRC校验：{}",
-                device.getDeviceId(), channel.getDeviceId(), channel.getStreamIdentification(), ssrcInfo.getPort(), ssrcInfo.getStream(),
+        log.info("[点播开始] deviceId: {}, channelId({}): {},码流类型：{}, 收流端口： {}, 码流：{}, 收流模式：{}, SSRC: {}, SSRC校验：{}",
+                device.getDeviceId(), channel.getDeviceId(), channel.getId(), channel.getStreamIdentification(), ssrcInfo.getPort(), ssrcInfo.getStream(),
                 device.getStreamMode(), ssrcInfo.getSsrc(), device.isSsrcCheck());
 
         // 初始化redis中的invite消息状态
         InviteInfo inviteInfo = InviteInfo.getInviteInfo(device.getDeviceId(), channel.getId(), ssrcInfo.getStream(), ssrcInfo, mediaServerItem.getId(),
                 mediaServerItem.getSdpIp(), ssrcInfo.getPort(), device.getStreamMode(), InviteSessionType.PLAY,
-                InviteSessionStatus.ready);
+                InviteSessionStatus.ready, userSetting.getRecordSip());
+        if (record != null) {
+            inviteInfo.setRecord(record);
+        }else {
+            inviteInfo.setRecord(userSetting.getRecordSip());
+        }
+
         inviteStreamService.updateInviteInfo(inviteInfo);
 
         try {
@@ -443,7 +469,7 @@ public class PlayServiceImpl implements IPlayService {
                 log.info("[点播失败]{}:{} deviceId: {}, channelId:{}",event.statusCode, event.msg, device.getDeviceId(), channel.getDeviceId());
                 receiveRtpServerService.closeRTPServer(mediaServerItem, ssrcInfo);
 
-                sessionManager.removeByStream(ssrcInfo.getStream());
+                sessionManager.removeByStream(ssrcInfo.getApp(), ssrcInfo.getStream());
                 if (callback != null) {
                     callback.run(event.statusCode, event.msg, null);
                 }
@@ -455,7 +481,7 @@ public class PlayServiceImpl implements IPlayService {
         } catch (InvalidArgumentException | SipException | ParseException e) {
             log.error("[命令发送失败] 点播消息: {}", e.getMessage());
             receiveRtpServerService.closeRTPServer(mediaServerItem, ssrcInfo);
-            sessionManager.removeByStream(ssrcInfo.getStream());
+            sessionManager.removeByStream(ssrcInfo.getApp(), ssrcInfo.getStream());
             if (callback != null) {
                 callback.run(InviteErrorCode.ERROR_FOR_SIP_SENDING_FAILED.getCode(),
                         InviteErrorCode.ERROR_FOR_SIP_SENDING_FAILED.getMsg(), null);
@@ -484,6 +510,7 @@ public class PlayServiceImpl implements IPlayService {
         try {
             sendRtpInfo = sendRtpServerService.createSendRtpInfo(mediaServerItem, null, null, playSsrc, device.getDeviceId(), "talk", stream,
                     channel.getId(), true, false);
+            sendRtpInfo.setPlayType(InviteStreamType.TALK);
         }catch (PlayException e) {
             log.info("[语音对讲]开始 获取发流端口失败 deviceId: {}, channelId: {},", device.getDeviceId(), channel.getDeviceId());
             return;
@@ -506,13 +533,13 @@ public class PlayServiceImpl implements IPlayService {
             timeoutCallback.run();
             // 点播超时回复BYE 同时释放ssrc以及此次点播的资源
             try {
-                cmder.streamByeCmd(device, channel.getDeviceId(), stream, null);
+                cmder.streamByeCmd(device, channel.getDeviceId(), null,  null, callId, null);
             } catch (InvalidArgumentException | ParseException | SipException | SsrcTransactionNotFoundException e) {
                 log.error("[语音对讲]超时， 发送BYE失败 {}", e.getMessage());
             } finally {
                 timeoutCallback.run();
                 mediaServerService.releaseSsrc(mediaServerItem.getId(), sendRtpInfo.getSsrc());
-                sessionManager.removeByStream(sendRtpInfo.getStream());
+                sessionManager.removeByStream(sendRtpInfo.getApp(), sendRtpInfo.getStream());
             }
         }, userSetting.getPlayTimeout());
 
@@ -521,7 +548,7 @@ public class PlayServiceImpl implements IPlayService {
             if (localPort == null || localPort <= 0) {
                 timeoutCallback.run();
                 mediaServerService.releaseSsrc(mediaServerItem.getId(), sendRtpInfo.getSsrc());
-                sessionManager.removeByStream(sendRtpInfo.getStream());
+                sessionManager.removeByStream(sendRtpInfo.getApp(), sendRtpInfo.getStream());
                 return;
             }
             sendRtpInfo.setPort(localPort);
@@ -556,7 +583,7 @@ public class PlayServiceImpl implements IPlayService {
                         sendRtpInfo.setCallId(response.getCallIdHeader().getCallId());
                         sendRtpServerService.update(sendRtpInfo);
 
-                        SsrcTransaction ssrcTransaction = SsrcTransaction.buildForDevice(device.getDeviceId(), sendRtpInfo.getChannelId(), "talk",
+                        SsrcTransaction ssrcTransaction = SsrcTransaction.buildForDevice(device.getDeviceId(), sendRtpInfo.getChannelId(), response.getCallIdHeader().getCallId(), sendRtpInfo.getApp(),
                                 sendRtpInfo.getStream(), sendRtpInfo.getSsrc(), sendRtpInfo.getMediaServerId(),
                                 response, InviteSessionType.TALK);
 
@@ -573,7 +600,7 @@ public class PlayServiceImpl implements IPlayService {
                 mediaServerService.closeRTPServer(mediaServerItem, sendRtpInfo.getStream());
                 // 释放ssrc
                 mediaServerService.releaseSsrc(mediaServerItem.getId(), sendRtpInfo.getSsrc());
-                sessionManager.removeByStream(sendRtpInfo.getStream());
+                sessionManager.removeByStream(sendRtpInfo.getApp(), sendRtpInfo.getStream());
                 errorEvent.response(event);
             }, userSetting.getPlayTimeout().longValue());
         } catch (InvalidArgumentException | SipException | ParseException e) {
@@ -584,7 +611,7 @@ public class PlayServiceImpl implements IPlayService {
             // 释放ssrc
             mediaServerService.releaseSsrc(mediaServerItem.getId(), sendRtpInfo.getSsrc());
 
-            sessionManager.removeByStream(sendRtpInfo.getStream());
+            sessionManager.removeByStream(sendRtpInfo.getApp(), sendRtpInfo.getStream());
             SipSubscribe.EventResult eventResult = new SipSubscribe.EventResult();
             eventResult.type = SipSubscribe.EventResultType.cmdSendFailEvent;
             eventResult.statusCode = -1;
@@ -627,18 +654,18 @@ public class PlayServiceImpl implements IPlayService {
             if (!result) {
                 // 主动连接失败，结束流程， 清理数据
                 receiveRtpServerService.closeRTPServer(mediaServerItem, ssrcInfo);
-                sessionManager.removeByStream(ssrcInfo.getStream());
-                callback.run(InviteErrorCode.ERROR_FOR_SDP_PARSING_EXCEPTIONS.getCode(),
-                        InviteErrorCode.ERROR_FOR_SDP_PARSING_EXCEPTIONS.getMsg(), null);
+                sessionManager.removeByStream(ssrcInfo.getApp(), ssrcInfo.getStream());
+                callback.run(InviteErrorCode.ERROR_FOR_TCP_ACTIVE_CONNECTION_REFUSED_ERROR.getCode(),
+                        InviteErrorCode.ERROR_FOR_TCP_ACTIVE_CONNECTION_REFUSED_ERROR.getMsg(), null);
                 inviteStreamService.call(InviteSessionType.BROADCAST, channel.getId(), null,
-                        InviteErrorCode.ERROR_FOR_SDP_PARSING_EXCEPTIONS.getCode(),
-                        InviteErrorCode.ERROR_FOR_SDP_PARSING_EXCEPTIONS.getMsg(), null);
+                        InviteErrorCode.ERROR_FOR_TCP_ACTIVE_CONNECTION_REFUSED_ERROR.getCode(),
+                        InviteErrorCode.ERROR_FOR_TCP_ACTIVE_CONNECTION_REFUSED_ERROR.getMsg(), null);
             }
         } catch (SdpException e) {
             log.error("[TCP主动连接对方] deviceId: {}, channelId: {}, 解析200OK的SDP信息失败", device.getDeviceId(), channel.getDeviceId(), e);
             receiveRtpServerService.closeRTPServer(mediaServerItem, ssrcInfo);
 
-            sessionManager.removeByStream(ssrcInfo.getStream());
+            sessionManager.removeByStream(ssrcInfo.getApp(), ssrcInfo.getStream());
 
             callback.run(InviteErrorCode.ERROR_FOR_SDP_PARSING_EXCEPTIONS.getCode(),
                     InviteErrorCode.ERROR_FOR_SDP_PARSING_EXCEPTIONS.getMsg(), null);
@@ -698,7 +725,6 @@ public class PlayServiceImpl implements IPlayService {
                 inviteInfo.setStreamInfo(streamInfo);
                 inviteStreamService.updateInviteInfo(inviteInfo);
             }
-
         }
         return streamInfo;
     }
@@ -729,6 +755,11 @@ public class PlayServiceImpl implements IPlayService {
         if (channel == null) {
             throw new ControllerException(ErrorCode.ERROR100.getCode(), "通道不存在");
         }
+        if (!userSetting.getServerId().equals(device.getServerId())) {
+            redisRpcPlayService.playback(device.getServerId(), channel.getId(), startTime, endTime, callback);
+            return;
+        }
+
         MediaServer newMediaServerItem = getNewMediaServerItem(device);
         if (newMediaServerItem == null) {
             throw new ControllerException(ErrorCode.ERROR100.getCode(), "未找到可用的节点");
@@ -782,14 +813,14 @@ public class PlayServiceImpl implements IPlayService {
                 }
                 inviteStreamService.call(InviteSessionType.PLAYBACK, channel.getId(), null, code, msg, null);
                 inviteStreamService.removeInviteInfoByDeviceAndChannel(InviteSessionType.PLAYBACK, channel.getId());
-                SsrcTransaction ssrcTransaction = sessionManager.getSsrcTransactionByStream(stream);
+                SsrcTransaction ssrcTransaction = sessionManager.getSsrcTransactionByStream("rtp", stream);
                 if (ssrcTransaction != null) {
                     try {
-                        cmder.streamByeCmd(device, channel.getDeviceId(), stream, null);
+                        cmder.streamByeCmd(device, channel.getDeviceId(),"rtp",  stream, null, null);
                     } catch (InvalidArgumentException | ParseException | SipException | SsrcTransactionNotFoundException e) {
                         log.error("[录像回放] 发送BYE失败 {}", e.getMessage());
                     } finally {
-                        sessionManager.removeByStream(stream);
+                        sessionManager.removeByStream("rtp", stream);
                     }
                 }
             }
@@ -812,7 +843,7 @@ public class PlayServiceImpl implements IPlayService {
         // 初始化redis中的invite消息状态
         InviteInfo inviteInfo = InviteInfo.getInviteInfo(device.getDeviceId(), channel.getId(), ssrcInfo.getStream(), ssrcInfo, mediaServerItem.getId(),
                 mediaServerItem.getSdpIp(), ssrcInfo.getPort(), device.getStreamMode(), InviteSessionType.PLAYBACK,
-                InviteSessionStatus.ready);
+                InviteSessionStatus.ready, userSetting.getRecordSip());
         inviteStreamService.updateInviteInfo(inviteInfo);
 
         try {
@@ -828,7 +859,7 @@ public class PlayServiceImpl implements IPlayService {
                         }
 
                         receiveRtpServerService.closeRTPServer(mediaServerItem, ssrcInfo);
-                        sessionManager.removeByStream(ssrcInfo.getStream());
+                        sessionManager.removeByStream(ssrcInfo.getApp(), ssrcInfo.getStream());
                         inviteStreamService.removeInviteInfo(inviteInfo);
                     }, userSetting.getPlayTimeout().longValue());
         } catch (InvalidArgumentException | SipException | ParseException e) {
@@ -837,7 +868,7 @@ public class PlayServiceImpl implements IPlayService {
                 callback.run(InviteErrorCode.FAIL.getCode(), e.getMessage(), null);
             }
             receiveRtpServerService.closeRTPServer(mediaServerItem, ssrcInfo);
-            sessionManager.removeByStream(ssrcInfo.getStream());
+            sessionManager.removeByStream(ssrcInfo.getApp(), ssrcInfo.getStream());
             inviteStreamService.removeInviteInfo(inviteInfo);
         }
     }
@@ -883,7 +914,7 @@ public class PlayServiceImpl implements IPlayService {
                     if (!result) {
                         try {
                             log.warn("[Invite 200OK] 更新ssrc失败，停止点播 {}/{}", device.getDeviceId(), channel.getDeviceId());
-                            cmder.streamByeCmd(device, channel.getDeviceId(), ssrcInfo.getStream(), null, null);
+                            cmder.streamByeCmd(device, channel.getDeviceId(), ssrcInfo.getApp(), ssrcInfo.getStream(), null, null);
                         } catch (InvalidArgumentException | SipException | ParseException | SsrcTransactionNotFoundException e) {
                             log.error("[命令发送失败] 停止播放， 发送BYE: {}", e.getMessage());
                         }
@@ -891,7 +922,7 @@ public class PlayServiceImpl implements IPlayService {
                         // 释放ssrc
                         mediaServerService.releaseSsrc(mediaServerItem.getId(), ssrcInfo.getSsrc());
 
-                        sessionManager.removeByStream(ssrcInfo.getStream());
+                        sessionManager.removeByStream(ssrcInfo.getApp(), ssrcInfo.getStream());
 
                         callback.run(InviteErrorCode.ERROR_FOR_RESET_SSRC.getCode(),
                                 "下级自定义了ssrc,重新设置收流信息失败", null);
@@ -917,13 +948,15 @@ public class PlayServiceImpl implements IPlayService {
                 if (ssrcInResponse != null) {
                     // 单端口
                     // 重新订阅流上线
-                    SsrcTransaction ssrcTransaction = sessionManager.getSsrcTransactionByStream(inviteInfo.getStream());
-                    sessionManager.removeByStream(inviteInfo.getStream());
+                    SsrcTransaction ssrcTransaction = sessionManager.getSsrcTransactionByStream("rtp", inviteInfo.getStream());
+                    sessionManager.removeByStream("rtp", inviteInfo.getStream());
                     inviteStreamService.updateInviteInfoForSSRC(inviteInfo, ssrcInResponse);
                     ssrcTransaction.setDeviceId(device.getDeviceId());
                     ssrcTransaction.setChannelId(ssrcTransaction.getChannelId());
                     ssrcTransaction.setCallId(ssrcTransaction.getCallId());
                     ssrcTransaction.setSsrc(ssrcInResponse);
+                    ssrcTransaction.setApp("rtp");
+                    ssrcTransaction.setStream(inviteInfo.getStream());
                     ssrcTransaction.setMediaServerId(mediaServerItem.getId());
                     ssrcTransaction.setSipTransactionInfo(new SipTransactionInfo((SIPResponse) responseEvent.getResponse()));
                     ssrcTransaction.setType(inviteSessionType);
@@ -936,6 +969,11 @@ public class PlayServiceImpl implements IPlayService {
 
     @Override
     public void download(Device device, DeviceChannel channel, String startTime, String endTime, int downloadSpeed, ErrorCallback<StreamInfo> callback) {
+
+        if (!userSetting.getServerId().equals(device.getServerId())) {
+            redisRpcPlayService.download(device.getServerId(), channel.getId(), startTime, endTime, downloadSpeed, callback);
+            return;
+        }
 
         MediaServer newMediaServerItem = this.getNewMediaServerItem(device);
         if (newMediaServerItem == null) {
@@ -986,14 +1024,14 @@ public class PlayServiceImpl implements IPlayService {
                 inviteStreamService.call(InviteSessionType.DOWNLOAD, channel.getId(), null, code, msg, null);
                 inviteStreamService.removeInviteInfoByDeviceAndChannel(InviteSessionType.DOWNLOAD, channel.getId());
                 if (result != null && result.getSsrcInfo() != null) {
-                    SsrcTransaction ssrcTransaction = sessionManager.getSsrcTransactionByStream(result.getSsrcInfo().getStream());
+                    SsrcTransaction ssrcTransaction = sessionManager.getSsrcTransactionByStream(result.getSsrcInfo().getApp(), result.getSsrcInfo().getStream());
                     if (ssrcTransaction != null) {
                         try {
-                            cmder.streamByeCmd(device, channel.getDeviceId(), ssrcTransaction.getStream(), null);
+                            cmder.streamByeCmd(device, channel.getDeviceId(), ssrcTransaction.getApp(), ssrcTransaction.getStream(), null, null);
                         } catch (InvalidArgumentException | ParseException | SipException | SsrcTransactionNotFoundException e) {
                             log.error("[录像下载] 发送BYE失败 {}", e.getMessage());
                         } finally {
-                            sessionManager.removeByStream(ssrcTransaction.getStream());
+                            sessionManager.removeByStream(ssrcTransaction.getApp(), ssrcTransaction.getStream());
                         }
                     }
                 }
@@ -1010,15 +1048,17 @@ public class PlayServiceImpl implements IPlayService {
                     null);
             return;
         }
-        log.info("[录像下载] deviceId: {}, channelId: {}, 下载速度：{}, 收流端口：{}, 收流模式：{}, SSRC: {}({}), SSRC校验：{}",
-                device.getDeviceId(), channel.getDeviceId(), downloadSpeed, ssrcInfo.getPort(), device.getStreamMode(),
+        log.info("[录像下载] deviceId: {}, channelId: {}, 开始时间： {}, 结束时间： {}， 下载速度：{}, 收流端口：{}, 收流模式：{}, SSRC: {}({}), SSRC校验：{}",
+                device.getDeviceId(), channel.getDeviceId(), startTime, endTime, downloadSpeed, ssrcInfo.getPort(), device.getStreamMode(),
                 ssrcInfo.getSsrc(), String.format("%08x", Long.parseLong(ssrcInfo.getSsrc())).toUpperCase(),
                 device.isSsrcCheck());
 
         // 初始化redis中的invite消息状态
         InviteInfo inviteInfo = InviteInfo.getInviteInfo(device.getDeviceId(), channel.getId(), ssrcInfo.getStream(), ssrcInfo, mediaServerItem.getId(),
                 mediaServerItem.getSdpIp(), ssrcInfo.getPort(), device.getStreamMode(), InviteSessionType.DOWNLOAD,
-                InviteSessionStatus.ready);
+                InviteSessionStatus.ready, true);
+        inviteInfo.setStartTime(startTime);
+        inviteInfo.setEndTime(endTime);
 
         inviteStreamService.updateInviteInfo(inviteInfo);
         try {
@@ -1027,7 +1067,7 @@ public class PlayServiceImpl implements IPlayService {
                         // 对方返回错误
                         callback.run(InviteErrorCode.FAIL.getCode(), String.format("录像下载失败， 错误码： %s, %s", eventResult.statusCode, eventResult.msg), null);
                         receiveRtpServerService.closeRTPServer(mediaServerItem, ssrcInfo);
-                        sessionManager.removeByStream(ssrcInfo.getStream());
+                        sessionManager.removeByStream(ssrcInfo.getApp(), ssrcInfo.getStream());
                         inviteStreamService.removeInviteInfo(inviteInfo);
                     }, eventResult ->{
                         // 处理收到200ok后的TCP主动连接以及SSRC不一致的问题
@@ -1059,13 +1099,15 @@ public class PlayServiceImpl implements IPlayService {
             log.error("[命令发送失败] 录像下载: {}", e.getMessage());
             callback.run(InviteErrorCode.FAIL.getCode(),e.getMessage(), null);
             receiveRtpServerService.closeRTPServer(mediaServerItem, ssrcInfo);
-            sessionManager.removeByStream(ssrcInfo.getStream());
+            sessionManager.removeByStream(ssrcInfo.getApp(), ssrcInfo.getStream());
             inviteStreamService.removeInviteInfo(inviteInfo);
         }
     }
 
     @Override
     public StreamInfo getDownLoadInfo(Device device, DeviceChannel channel, String stream) {
+
+
         InviteInfo inviteInfo = inviteStreamService.getInviteInfo(InviteSessionType.DOWNLOAD, channel.getId(), stream);
         if (inviteInfo == null) {
             String app = "rtp";
@@ -1195,8 +1237,8 @@ public class PlayServiceImpl implements IPlayService {
                         continue;
                     }
                     try {
-                        cmder.streamByeCmd(device, deviceChannel.getDeviceId(),
-                                ssrcTransaction.getStream(), null);
+                        cmder.streamByeCmd(device, deviceChannel.getDeviceId(), ssrcTransaction.getApp(),
+                                ssrcTransaction.getStream(), null, null);
                     } catch (InvalidArgumentException | ParseException | SipException |
                              SsrcTransactionNotFoundException e) {
                         log.error("[zlm离线]为正在使用此zlm的设备， 发送BYE失败 {}", e.getMessage());
@@ -1207,10 +1249,19 @@ public class PlayServiceImpl implements IPlayService {
     }
 
     @Override
-    public AudioBroadcastResult audioBroadcast(Device device, DeviceChannel deviceChannel, Boolean broadcastMode) {
-        // TODO 必须多端口模式才支持语音喊话鹤语音对讲
-        if (device == null || deviceChannel == null) {
-            return null;
+    public AudioBroadcastResult audioBroadcast(String deviceId, String channelDeviceId, Boolean broadcastMode) {
+
+        Device device = deviceService.getDeviceByDeviceId(deviceId);
+        if (device == null) {
+            throw new ControllerException(ErrorCode.ERROR400.getCode(), "未找到设备： " + deviceId);
+        }
+        DeviceChannel deviceChannel = deviceChannelService.getOne(deviceId, channelDeviceId);
+        if (deviceChannel == null) {
+            throw new ControllerException(ErrorCode.ERROR400.getCode(), "未找到通道： " + channelDeviceId);
+        }
+
+        if (!userSetting.getServerId().equals(device.getServerId())) {
+            return redisRpcPlayService.audioBroadcast(device.getServerId(), deviceId, channelDeviceId, broadcastMode);
         }
         log.info("[语音喊话] device： {}, channel: {}", device.getDeviceId(), deviceChannel.getDeviceId());
         MediaServer mediaServerItem = mediaServerService.getMediaServerForMinimumLoad(null);
@@ -1342,11 +1393,20 @@ public class PlayServiceImpl implements IPlayService {
 
     @Override
     public void pauseRtp(String streamId) throws ServiceException, InvalidArgumentException, ParseException, SipException {
+
         InviteInfo inviteInfo = inviteStreamService.getInviteInfoByStream(InviteSessionType.PLAYBACK, streamId);
         if (null == inviteInfo || inviteInfo.getStreamInfo() == null) {
-            log.warn("streamId不存在!");
-            throw new ServiceException("streamId不存在");
+            throw new ControllerException(ErrorCode.ERROR100.getCode(), "streamId不存在");
         }
+        Device device = deviceService.getDeviceByDeviceId(inviteInfo.getDeviceId());
+        if (device == null) {
+            throw new ControllerException(ErrorCode.ERROR100.getCode(), "设备不存在");
+        }
+        if (!userSetting.getServerId().equals(device.getServerId())) {
+            redisRpcPlayService.pauseRtp(device.getServerId(), streamId);
+            return;
+        }
+
         inviteInfo.getStreamInfo().setPause(true);
         inviteStreamService.updateInviteInfo(inviteInfo);
         MediaServer mediaServerItem = inviteInfo.getStreamInfo().getMediaServer();
@@ -1364,7 +1424,7 @@ public class PlayServiceImpl implements IPlayService {
         if (!result) {
             throw new ServiceException("暂停RTP接收失败");
         }
-        Device device = deviceService.getDeviceByDeviceId(inviteInfo.getDeviceId());
+
         DeviceChannel channel = deviceChannelService.getOneById(inviteInfo.getChannelId());
         cmder.playPauseCmd(device, channel, inviteInfo.getStreamInfo());
     }
@@ -1373,9 +1433,17 @@ public class PlayServiceImpl implements IPlayService {
     public void resumeRtp(String streamId) throws ServiceException, InvalidArgumentException, ParseException, SipException {
         InviteInfo inviteInfo = inviteStreamService.getInviteInfoByStream(InviteSessionType.PLAYBACK, streamId);
         if (null == inviteInfo || inviteInfo.getStreamInfo() == null) {
-            log.warn("streamId不存在!");
-            throw new ServiceException("streamId不存在");
+            throw new ControllerException(ErrorCode.ERROR100.getCode(), "streamId不存在");
         }
+        Device device = deviceService.getDeviceByDeviceId(inviteInfo.getDeviceId());
+        if (device == null) {
+            throw new ControllerException(ErrorCode.ERROR100.getCode(), "设备不存在");
+        }
+        if (!userSetting.getServerId().equals(device.getServerId())) {
+            redisRpcPlayService.resumeRtp(device.getServerId(), streamId);
+            return;
+        }
+
         inviteInfo.getStreamInfo().setPause(false);
         inviteStreamService.updateInviteInfo(inviteInfo);
         MediaServer mediaServerItem = inviteInfo.getStreamInfo().getMediaServer();
@@ -1383,7 +1451,6 @@ public class PlayServiceImpl implements IPlayService {
             log.warn("mediaServer 不存在!");
             throw new ServiceException("mediaServer不存在");
         }
-        // zlm 暂停RTP超时检查
         // 使用zlm中的流ID
         String streamKey = inviteInfo.getStream();
         if (!mediaServerItem.isRtpEnable()) {
@@ -1393,7 +1460,6 @@ public class PlayServiceImpl implements IPlayService {
         if (!result) {
             throw new ServiceException("继续RTP接收失败");
         }
-        Device device = deviceService.getDeviceByDeviceId(inviteInfo.getDeviceId());
         DeviceChannel channel = deviceChannelService.getOneById(inviteInfo.getChannelId());
         cmder.playResumeCmd(device, channel, inviteInfo.getStreamInfo());
     }
@@ -1530,10 +1596,10 @@ public class PlayServiceImpl implements IPlayService {
 
         ssrcFactory.releaseSsrc(mediaServerId, sendRtpInfo.getSsrc());
 
-        SsrcTransaction ssrcTransaction = sessionManager.getSsrcTransactionByStream(sendRtpInfo.getStream());
+        SsrcTransaction ssrcTransaction = sessionManager.getSsrcTransactionByStream(sendRtpInfo.getApp(), sendRtpInfo.getStream());
         if (ssrcTransaction != null) {
             try {
-                cmder.streamByeCmd(device, channel.getDeviceId(), sendRtpInfo.getStream(), null);
+                cmder.streamByeCmd(device, channel.getDeviceId(), sendRtpInfo.getApp(), sendRtpInfo.getStream(), null, null);
             } catch (InvalidArgumentException | ParseException | SipException | SsrcTransactionNotFoundException  e) {
                 log.info("[语音对讲] 停止消息发送失败，可能已经停止");
             }
@@ -1589,29 +1655,33 @@ public class PlayServiceImpl implements IPlayService {
 
     @Override
     public void stop(InviteSessionType type, Device device, DeviceChannel channel, String stream) {
-        InviteInfo inviteInfo = inviteStreamService.getInviteInfo(type, channel.getId(), stream);
-        if (inviteInfo == null) {
-            if (type == InviteSessionType.PLAY) {
+        if (!userSetting.getServerId().equals(device.getServerId())) {
+            redisRpcPlayService.stop(device.getServerId(), type,  channel.getId(), stream);
+        }else {
+            InviteInfo inviteInfo = inviteStreamService.getInviteInfo(type, channel.getId(), stream);
+            if (inviteInfo == null) {
+                if (type == InviteSessionType.PLAY) {
+                    deviceChannelService.stopPlay(channel.getId());
+                }
+                return;
+            }
+            inviteStreamService.removeInviteInfo(inviteInfo);
+            if (InviteSessionStatus.ok == inviteInfo.getStatus()) {
+                try {
+                    log.info("[停止点播/回放/下载] {}/{}", device.getDeviceId(), channel.getDeviceId());
+                    cmder.streamByeCmd(device, channel.getDeviceId(), "rtp", inviteInfo.getStream(), null, null);
+                } catch (InvalidArgumentException | SipException | ParseException | SsrcTransactionNotFoundException e) {
+                    log.error("[命令发送失败] 停止点播/回放/下载， 发送BYE: {}", e.getMessage());
+                    throw new ControllerException(ErrorCode.ERROR100.getCode(), "命令发送失败: " + e.getMessage());
+                }
+            }
+
+            if (inviteInfo.getType() == InviteSessionType.PLAY) {
                 deviceChannelService.stopPlay(channel.getId());
             }
-            return;
-        }
-        inviteStreamService.removeInviteInfo(inviteInfo);
-        if (InviteSessionStatus.ok == inviteInfo.getStatus()) {
-            try {
-                log.info("[停止点播/回放/下载] {}/{}", device.getDeviceId(), channel.getDeviceId());
-                cmder.streamByeCmd(device, channel.getDeviceId(), inviteInfo.getStream(), null, null);
-            } catch (InvalidArgumentException | SipException | ParseException | SsrcTransactionNotFoundException e) {
-                log.error("[命令发送失败] 停止点播/回放/下载， 发送BYE: {}", e.getMessage());
-                throw new ControllerException(ErrorCode.ERROR100.getCode(), "命令发送失败: " + e.getMessage());
+            if (inviteInfo.getStreamInfo() != null) {
+                receiveRtpServerService.closeRTPServer(inviteInfo.getStreamInfo().getMediaServer(), inviteInfo.getSsrcInfo());
             }
-        }
-
-        if (inviteInfo.getType() == InviteSessionType.PLAY) {
-            deviceChannelService.stopPlay(channel.getId());
-        }
-        if (inviteInfo.getStreamInfo() != null) {
-            receiveRtpServerService.closeRTPServer(inviteInfo.getStreamInfo().getMediaServer(), inviteInfo.getSsrcInfo());
         }
     }
 
@@ -1632,7 +1702,7 @@ public class PlayServiceImpl implements IPlayService {
         if (InviteSessionStatus.ok == inviteInfo.getStatus()) {
             try {
                 log.info("[停止点播/回放/下载] {}/{}", device.getDeviceId(), channel.getDeviceId());
-                cmder.streamByeCmd(device, channel.getDeviceId(), inviteInfo.getStream(), null, null);
+                cmder.streamByeCmd(device, channel.getDeviceId(), "rtp", inviteInfo.getStream(), null, null);
             } catch (InvalidArgumentException | SipException | ParseException | SsrcTransactionNotFoundException e) {
                 log.warn("[命令发送失败] 停止点播/回放/下载， 发送BYE: {}", e.getMessage());
             }
@@ -1647,19 +1717,32 @@ public class PlayServiceImpl implements IPlayService {
     }
 
     @Override
-    public void play(CommonGBChannel channel, ErrorCallback<StreamInfo> callback) {
+    public void play(CommonGBChannel channel, Boolean record, ErrorCallback<StreamInfo> callback) {
         Device device = deviceService.getDevice(channel.getDataDeviceId());
         if (device == null) {
             log.warn("[点播] 未找到通道{}的设备信息", channel);
             throw new PlayException(Response.SERVER_INTERNAL_ERROR, "server internal error");
         }
-        MediaServer mediaServer = getNewMediaServerItem(device);
-        if (mediaServer == null) {
-            log.warn("[点播] 未找到可用媒体节点");
+        DeviceChannel deviceChannel = deviceChannelService.getOneForSourceById(channel.getGbId());
+
+        MediaServer mediaServerItem = getNewMediaServerItem(device);
+        if (mediaServerItem == null) {
+            log.warn("[点播] 未找到可用的zlm deviceId: {},channelId:{}", device.getDeviceId(), deviceChannel.getDeviceId());
+            throw new ControllerException(ErrorCode.ERROR100.getCode(), "未找到可用的zlm");
+        }
+        play(mediaServerItem, device, deviceChannel, null, record, callback);
+
+    }
+
+    @Override
+    public void stop(InviteSessionType inviteSessionType, CommonGBChannel channel, String stream) {
+        Device device = deviceService.getDevice(channel.getDataDeviceId());
+        if (device == null) {
+            log.warn("[停止播放] 未找到通道{}的设备信息", channel);
             throw new PlayException(Response.SERVER_INTERNAL_ERROR, "server internal error");
         }
         DeviceChannel deviceChannel = deviceChannelService.getOneForSourceById(channel.getGbId());
-        play(mediaServer, device, deviceChannel, null, callback);
+        stop(inviteSessionType, device, deviceChannel, stream);
     }
 
     @Override

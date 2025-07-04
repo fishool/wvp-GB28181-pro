@@ -103,7 +103,9 @@ public class ZLMHttpHookListener {
         String mediaServerId = json.getString("mediaServerId");
         MediaServer mediaServer = mediaServerService.getOne(mediaServerId);
         if (mediaServer == null) {
-            return new HookResultForOnPublish(0, "success");
+            HookResultForOnPublish fail = HookResultForOnPublish.Fail();
+            log.warn("[ZLM HOOK]推流鉴权 响应：{}->找不到对应的mediaServer", param.getMediaServerId());
+            return fail;
         }
 
         ResultForOnPublish resultForOnPublish = mediaService.authenticatePublish(mediaServer, param.getApp(), param.getStream(), param.getParams());
@@ -124,7 +126,6 @@ public class ZLMHttpHookListener {
     @ResponseBody
     @PostMapping(value = "/on_stream_changed", produces = "application/json;charset=UTF-8")
     public HookResult onStreamChanged(@RequestBody OnStreamChangedHookParam param) {
-
         MediaServer mediaServer = mediaServerService.getOne(param.getMediaServerId());
         if (mediaServer == null) {
             return HookResult.SUCCESS();
@@ -177,6 +178,9 @@ public class ZLMHttpHookListener {
             ret.put("code", 0);
             return ret;
         }
+        if (mediaInfo.getTranscodeSuffix() != null && param.getStream().endsWith(mediaInfo.getTranscodeSuffix())) {
+            param.setStream(param.getStream().substring(0, param.getStream().lastIndexOf(mediaInfo.getTranscodeSuffix()) - 1));
+        }
         if (!ObjectUtils.isEmpty(mediaInfo.getTranscodeSuffix())
                 && !"null".equalsIgnoreCase(mediaInfo.getTranscodeSuffix())
                 && param.getStream().endsWith(mediaInfo.getTranscodeSuffix())  ) {
@@ -185,6 +189,8 @@ public class ZLMHttpHookListener {
 
         JSONObject ret = new JSONObject();
         boolean close = mediaService.closeStreamOnNoneReader(param.getMediaServerId(), param.getApp(), param.getStream(), param.getSchema());
+        log.info("[ZLM HOOK]流无人观看是否触发关闭：{}, {}->{}->{}/{}", close, param.getMediaServerId(), param.getSchema(),
+                param.getApp(), param.getStream());
         ret.put("code", 0);
         ret.put("close", close);
         return ret;

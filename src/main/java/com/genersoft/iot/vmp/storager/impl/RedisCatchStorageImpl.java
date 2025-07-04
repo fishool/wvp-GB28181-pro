@@ -2,9 +2,9 @@ package com.genersoft.iot.vmp.storager.impl;
 
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
+import com.genersoft.iot.vmp.common.ServerInfo;
 import com.genersoft.iot.vmp.common.SystemAllInfo;
 import com.genersoft.iot.vmp.common.VideoManagerConstants;
-import com.genersoft.iot.vmp.common.enums.ChannelDataType;
 import com.genersoft.iot.vmp.conf.UserSetting;
 import com.genersoft.iot.vmp.gb28181.bean.*;
 import com.genersoft.iot.vmp.gb28181.dao.DeviceChannelMapper;
@@ -15,7 +15,6 @@ import com.genersoft.iot.vmp.media.zlm.dto.StreamAuthorityInfo;
 import com.genersoft.iot.vmp.service.bean.GPSMsgInfo;
 import com.genersoft.iot.vmp.service.bean.MessageForPushChannel;
 import com.genersoft.iot.vmp.storager.IRedisCatchStorage;
-import com.genersoft.iot.vmp.storager.dao.dto.PlatformRegisterInfo;
 import com.genersoft.iot.vmp.utils.DateUtil;
 import com.genersoft.iot.vmp.utils.JsonUtil;
 import com.genersoft.iot.vmp.utils.SystemInfoUtils;
@@ -73,47 +72,23 @@ public class RedisCatchStorageImpl implements IRedisCatchStorage {
         redisTemplate.opsForValue().set(key, 1);
     }
 
-    @Override
-    public void updatePlatformCatchInfo(PlatformCatch parentPlatformCatch) {
-        String key = VideoManagerConstants.PLATFORM_CATCH_PREFIX  + userSetting.getServerId() + "_" +  parentPlatformCatch.getId();
-        redisTemplate.opsForValue().set(key, parentPlatformCatch);
-    }
 
     @Override
-    public PlatformCatch queryPlatformCatchInfo(String platformGbId) {
-        return (PlatformCatch)redisTemplate.opsForValue().get(VideoManagerConstants.PLATFORM_CATCH_PREFIX + userSetting.getServerId() + "_" + platformGbId);
-    }
-
-    @Override
-    public void delPlatformCatchInfo(String platformGbId) {
-        redisTemplate.delete(VideoManagerConstants.PLATFORM_CATCH_PREFIX + userSetting.getServerId() + "_" + platformGbId);
-    }
-
-    @Override
-    public void updatePlatformRegisterInfo(String callId, PlatformRegisterInfo platformRegisterInfo) {
-        String key = VideoManagerConstants.PLATFORM_REGISTER_INFO_PREFIX + userSetting.getServerId() + "_" + callId;
-        Duration duration = Duration.ofSeconds(30L);
-        redisTemplate.opsForValue().set(key, platformRegisterInfo, duration);
-    }
-
-
-    @Override
-    public PlatformRegisterInfo queryPlatformRegisterInfo(String callId) {
-        return (PlatformRegisterInfo)redisTemplate.opsForValue().get(VideoManagerConstants.PLATFORM_REGISTER_INFO_PREFIX + userSetting.getServerId() + "_" + callId);
-    }
-
-    @Override
-    public void delPlatformRegisterInfo(String callId) {
-         redisTemplate.delete(VideoManagerConstants.PLATFORM_REGISTER_INFO_PREFIX + userSetting.getServerId() + "_" + callId);
-    }
-
-
-
-    @Override
-    public void updateWVPInfo(JSONObject jsonObject, int time) {
+    public void updateWVPInfo(ServerInfo serverInfo, int time) {
         String key = VideoManagerConstants.WVP_SERVER_PREFIX + userSetting.getServerId();
         Duration duration = Duration.ofSeconds(time);
-        redisTemplate.opsForValue().set(key, jsonObject, duration);
+        redisTemplate.opsForValue().set(key, serverInfo, duration);
+        // 设置平台的分数值
+        String setKey = VideoManagerConstants.WVP_SERVER_LIST;
+        // 首次设置就设置为0, 后续值越小说明越是最近启动的
+        redisTemplate.opsForZSet().add(setKey, userSetting.getServerId(), System.currentTimeMillis());
+    }
+
+    @Override
+    public void removeOfflineWVPInfo(String serverId) {
+        String setKey = VideoManagerConstants.WVP_SERVER_LIST;
+        // 首次设置就设置为0, 后续值越小说明越是最近启动的
+        redisTemplate.opsForZSet().remove(setKey, serverId);
     }
 
     @Override
@@ -496,7 +471,7 @@ public class RedisCatchStorageImpl implements IRedisCatchStorage {
     public void removePushListItem(String app, String stream, String mediaServerId) {
         String key = VideoManagerConstants.PUSH_STREAM_LIST + app + "_" + stream;
         MediaInfo param = (MediaInfo)redisTemplate.opsForValue().get(key);
-        if (param != null && param.getMediaServer().getId().equalsIgnoreCase(mediaServerId)) {
+        if (param != null) {
             redisTemplate.delete(key);
         }
     }
@@ -532,5 +507,22 @@ public class RedisCatchStorageImpl implements IRedisCatchStorage {
         String key = VideoManagerConstants.VM_MSG_STREAM_PUSH_CLOSE_REQUESTED;
         log.info("[redis发送通知] 流上线 {}: {}/{}->{}", key, sendRtpItem.getApp(), sendRtpItem.getStream(), sendRtpItem.getTargetId());
         redisTemplate.convertAndSend(key, JSON.toJSON(sendRtpItem));
+    }
+
+    @Override
+    public ServerInfo queryServerInfo(String serverId) {
+        String key = VideoManagerConstants.WVP_SERVER_PREFIX + serverId;
+        return (ServerInfo)redisTemplate.opsForValue().get(key);
+    }
+
+    @Override
+    public String chooseOneServer(String serverId) {
+        String key = VideoManagerConstants.WVP_SERVER_LIST;
+        redisTemplate.opsForZSet().remove(key, serverId);
+        Set<Object> range = redisTemplate.opsForZSet().range(key, 0, 0);
+        if (range == null || range.isEmpty()) {
+            return null;
+        }
+        return (String) range.iterator().next();
     }
 }

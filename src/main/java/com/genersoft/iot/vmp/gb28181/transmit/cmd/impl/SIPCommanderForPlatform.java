@@ -7,7 +7,6 @@ import com.genersoft.iot.vmp.conf.UserSetting;
 import com.genersoft.iot.vmp.conf.exception.SsrcTransactionNotFoundException;
 import com.genersoft.iot.vmp.gb28181.SipLayer;
 import com.genersoft.iot.vmp.gb28181.bean.*;
-import com.genersoft.iot.vmp.gb28181.dao.CommonGBChannelMapper;
 import com.genersoft.iot.vmp.gb28181.event.SipSubscribe;
 import com.genersoft.iot.vmp.gb28181.session.SipInviteSessionManager;
 import com.genersoft.iot.vmp.gb28181.transmit.SIPSender;
@@ -22,7 +21,6 @@ import com.genersoft.iot.vmp.media.service.IMediaServerService;
 import com.genersoft.iot.vmp.service.bean.GPSMsgInfo;
 import com.genersoft.iot.vmp.service.bean.SSRCInfo;
 import com.genersoft.iot.vmp.storager.IRedisCatchStorage;
-import com.genersoft.iot.vmp.storager.dao.dto.PlatformRegisterInfo;
 import com.genersoft.iot.vmp.utils.DateUtil;
 import com.genersoft.iot.vmp.utils.GitUtil;
 import gov.nist.javax.sip.message.MessageFactoryImpl;
@@ -122,9 +120,6 @@ public class SIPCommanderForPlatform implements ISIPCommanderForPlatform {
                 request = headerProviderPlatformProvider.createRegisterRequest(parentPlatform,
                         redisCatchStorage.getCSEQ(), fromTag,
                         toTag, callIdHeader, isRegister? parentPlatform.getExpires() : 0);
-                // 将 callid 写入缓存， 等注册成功可以更新状态
-                String callIdFromHeader = callIdHeader.getCallId();
-                redisCatchStorage.updatePlatformRegisterInfo(callIdFromHeader, PlatformRegisterInfo.getInstance(parentPlatform.getServerGBId(), isRegister));
             }else {
                 request = headerProviderPlatformProvider.createRegisterRequest(parentPlatform, fromTag, toTag, www, callIdHeader, isRegister? parentPlatform.getExpires() : 0);
             }
@@ -133,25 +128,25 @@ public class SIPCommanderForPlatform implements ISIPCommanderForPlatform {
                 if (event != null) {
                     log.info("[国标级联]：{},  注册失败: {} ", parentPlatform.getServerGBId(), event.msg);
                 }
-                redisCatchStorage.delPlatformRegisterInfo(callIdHeader.getCallId());
                 if (errorEvent != null ) {
                     errorEvent.response(event);
                 }
-            }, okEvent, 5L);
+            }, okEvent, 2000L);
     }
 
     @Override
     public String keepalive(Platform parentPlatform, SipSubscribe.Event errorEvent , SipSubscribe.Event okEvent) throws SipException, InvalidArgumentException, ParseException {
-            String characterSet = parentPlatform.getCharacterSet();
-            StringBuffer keepaliveXml = new StringBuffer(200);
-            keepaliveXml.append("<?xml version=\"1.0\" encoding=\"")
-                    .append(characterSet).append("\"?>\r\n")
-                    .append("<Notify>\r\n")
-                    .append("<CmdType>Keepalive</CmdType>\r\n")
-                    .append("<SN>" + (int)((Math.random()*9+1)*100000) + "</SN>\r\n")
-                    .append("<DeviceID>" + parentPlatform.getDeviceGBId() + "</DeviceID>\r\n")
-                    .append("<Status>OK</Status>\r\n")
-                    .append("</Notify>\r\n");
+        log.info("[国标级联] 发送心跳， 上级平台编号： {}", parentPlatform.getServerGBId());
+        String characterSet = parentPlatform.getCharacterSet();
+        StringBuffer keepaliveXml = new StringBuffer(200);
+        keepaliveXml.append("<?xml version=\"1.0\" encoding=\"")
+                .append(characterSet).append("\"?>\r\n")
+                .append("<Notify>\r\n")
+                .append("<CmdType>Keepalive</CmdType>\r\n")
+                .append("<SN>" + (int)((Math.random()*9+1)*100000) + "</SN>\r\n")
+                .append("<DeviceID>" + parentPlatform.getDeviceGBId() + "</DeviceID>\r\n")
+                .append("<Status>OK</Status>\r\n")
+                .append("</Notify>\r\n");
 
         CallIdHeader callIdHeader = sipSender.getNewCallIdHeader(parentPlatform.getDeviceIp(),parentPlatform.getTransport());
 
@@ -370,7 +365,7 @@ public class SIPCommanderForPlatform implements ISIPCommanderForPlatform {
                 .append("<CmdType>MobilePosition</CmdType>\r\n")
                 .append("<SN>" + (int)((Math.random()*9+1)*100000) + "</SN>\r\n")
                 .append("<DeviceID>" + channel.getGbDeviceId() + "</DeviceID>\r\n")
-                .append("<Time>" + gpsMsgInfo.getTime() + "</Time>\r\n")
+                .append("<Time>" + DateUtil.yyyy_MM_dd_HH_mm_ssToISO8601(gpsMsgInfo.getTime()) + "</Time>\r\n")
                 .append("<Longitude>" + gpsMsgInfo.getLng() + "</Longitude>\r\n")
                 .append("<Latitude>" + gpsMsgInfo.getLat() + "</Latitude>\r\n")
                 .append("<Speed>" + gpsMsgInfo.getSpeed() + "</Speed>\r\n")
@@ -644,13 +639,13 @@ public class SIPCommanderForPlatform implements ISIPCommanderForPlatform {
     }
 
     @Override
-    public void streamByeCmd(Platform platform, CommonGBChannel channel, String stream, String callId, SipSubscribe.Event okEvent) throws InvalidArgumentException, SipException, ParseException, SsrcTransactionNotFoundException {
+    public void streamByeCmd(Platform platform, CommonGBChannel channel, String app, String stream, String callId, SipSubscribe.Event okEvent) throws InvalidArgumentException, SipException, ParseException, SsrcTransactionNotFoundException {
 
         SsrcTransaction ssrcTransaction = null;
         if (callId != null) {
             ssrcTransaction = sessionManager.getSsrcTransactionByCallId(callId);
         }else if (stream != null) {
-            ssrcTransaction = sessionManager.getSsrcTransactionByStream(stream);
+            ssrcTransaction = sessionManager.getSsrcTransactionByStream(app, stream);
         }
         if (ssrcTransaction == null) {
             throw new SsrcTransactionNotFoundException(platform.getServerGBId(), channel.getGbDeviceId(), callId, stream);
@@ -658,7 +653,7 @@ public class SIPCommanderForPlatform implements ISIPCommanderForPlatform {
 
         mediaServerService.releaseSsrc(ssrcTransaction.getMediaServerId(), ssrcTransaction.getSsrc());
         mediaServerService.closeRTPServer(ssrcTransaction.getMediaServerId(), ssrcTransaction.getStream());
-        sessionManager.removeByStream(ssrcTransaction.getStream());
+        sessionManager.removeByStream(ssrcTransaction.getApp(), ssrcTransaction.getStream());
 
         Request byteRequest = headerProviderPlatformProvider.createByteRequest(platform, channel.getGbDeviceId(), ssrcTransaction.getSipTransactionInfo());
         sipSender.transmitRequest(sipLayer.getLocalIp(platform.getDeviceIp()), byteRequest, null, okEvent);
@@ -743,14 +738,15 @@ public class SIPCommanderForPlatform implements ISIPCommanderForPlatform {
                 content.toString(), SipUtils.getNewViaTag(), SipUtils.getNewFromTag(),  ssrcInfo.getSsrc(),
                 callIdHeader);
         sipSender.transmitRequest(sipLayer.getLocalIp(platform.getDeviceIp()), request, (e -> {
-            sessionManager.removeByStream(ssrcInfo.getStream());
+            sessionManager.removeByStream(ssrcInfo.getApp(), ssrcInfo.getStream());
             mediaServerService.releaseSsrc(mediaServerItem.getId(), ssrcInfo.getSsrc());
             subscribe.removeSubscribe(hook);
             errorEvent.response(e);
         }), e -> {
             ResponseEvent responseEvent = (ResponseEvent) e.event;
             SIPResponse response = (SIPResponse) responseEvent.getResponse();
-            SsrcTransaction ssrcTransaction = SsrcTransaction.buildForPlatform(platform.getServerGBId(), channel.getGbId(), callIdHeader.getCallId(),  stream, ssrcInfo.getSsrc(), mediaServerItem.getId(), response, InviteSessionType.BROADCAST);
+            SsrcTransaction ssrcTransaction = SsrcTransaction.buildForPlatform(platform.getServerGBId(), channel.getGbId(),
+                    callIdHeader.getCallId(), ssrcInfo.getApp(),  stream, ssrcInfo.getSsrc(), mediaServerItem.getId(), response, InviteSessionType.BROADCAST);
             sessionManager.put(ssrcTransaction);
             okEvent.response(e);
         });

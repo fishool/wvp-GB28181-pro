@@ -48,9 +48,9 @@ public interface StreamPushMapper {
             " from " +
             " wvp_stream_push st " +
             " LEFT join wvp_device_channel wdc " +
-            " on st.id = wdc.data_device_id " +
+            " on wdc.data_type = 2 and st.id = wdc.data_device_id " +
             " WHERE " +
-            " wdc.data_type = 2 " +
+            " 1=1 " +
             " <if test='query != null'> AND (st.app LIKE concat('%',#{query},'%') escape '/' OR st.stream LIKE concat('%',#{query},'%') escape '/' " +
             " OR wdc.gb_device_id LIKE concat('%',#{query},'%') escape '/' OR wdc.gb_name LIKE concat('%',#{query},'%') escape '/')</if> " +
             " <if test='pushing == true' > AND st.pushing=1</if>" +
@@ -80,10 +80,9 @@ public interface StreamPushMapper {
     List<StreamPush> selectAllByMediaServerIdWithOutGbID(String mediaServerId);
 
     @Update("UPDATE wvp_stream_push " +
-            "SET pushing=#{pushing} " +
+            "SET pushing=#{pushing}, server_id=#{serverId}, media_server_id=#{mediaServerId} " +
             "WHERE id=#{id}")
-    int updatePushStatus(@Param("id") int id, @Param("pushing") boolean pushing);
-
+    int updatePushStatus(StreamPush streamPush);
 
     @Select("<script> "+
             "SELECT st.*, st.id as data_device_id, wdc.*, wdc.id as gb_id FROM wvp_stream_push st LEFT join wvp_device_channel wdc on wdc.data_type = 2 and st.id = wdc.data_device_id " +
@@ -92,7 +91,7 @@ public interface StreamPushMapper {
             "(#{item.app}, #{item.stream}) " +
             "</foreach>" +
             ")</script>")
-    List<StreamPush> getListFromRedis(List<StreamPushItemFromRedis> offlineStreams);
+    List<StreamPush> getListInList(List<StreamPushItemFromRedis> offlineStreams);
 
 
     @Select("SELECT CONCAT(app,stream) from wvp_stream_push")

@@ -8,6 +8,7 @@ import com.genersoft.iot.vmp.utils.DateUtil;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
+import lombok.NoArgsConstructor;
 import org.jetbrains.annotations.NotNull;
 import org.springframework.util.ObjectUtils;
 
@@ -15,6 +16,7 @@ import org.springframework.util.ObjectUtils;
 @Data
 @Schema(description = "推流信息")
 @EqualsAndHashCode(callSuper = true)
+@NoArgsConstructor
 public class StreamPush extends CommonGBChannel implements Comparable<StreamPush>{
 
     /**
@@ -77,9 +79,34 @@ public class StreamPush extends CommonGBChannel implements Comparable<StreamPush
     @Schema(description = "拉起离线推流")
     private boolean startOfflinePush;
 
+    /**
+     * 速度,单位:km/h (可选)
+     */
+    @Schema(description = "GPS的速度")
+    private Double gpsSpeed;
+
+    /**
+     * 方向,取值为当前摄像头方向与正北方的顺时针夹角,取值范围0°~360°,单位:(°)(可选)
+     */
+    @Schema(description = "GPS的方向")
+    private Double gpsDirection;
+
+    /**
+     * 海拔高度,单位:m(可选)
+     */
+    @Schema(description = "GPS的海拔高度")
+    private Double gpsAltitude;
+
+    /**
+     * GPS的更新时间
+     */
+    @Schema(description = "GPS的更新时间")
+    private String gpsTime;
+
     private String uniqueKey;
 
     private Integer dataType = ChannelDataType.STREAM_PUSH.value;
+
 
     @Override
     public int compareTo(@NotNull StreamPush streamPushItem) {
