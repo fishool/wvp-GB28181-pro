@@ -28,6 +28,11 @@ spring:
     timeout: 10000
     # mysql数据源
   datasource:
+    # 必须修改
+    url: jdbc:mysql://121.41.65.92:3306/wvp2?useUnicode=true&characterEncoding=UTF8&rewriteBatchedStatements=true&serverTimezone=PRC&useSSL=false&allowMultiQueries=true
+    username: root
+    password: ijavac
+    driver-class-name: com.mysql.cj.jdbc.Driver
     dynamic:
       primary: master
       datasource:
